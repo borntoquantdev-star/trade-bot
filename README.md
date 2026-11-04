@@ -13,6 +13,7 @@ backtest.
 - [VS Code and AI assistants](docs/vscode.md) - Codex, Claude Code, Copilot
 - [Architecture and the risk contract](docs/architecture.md)
 - [Writing a strategy](docs/strategies.md)
+- [The dashboard](docs/dashboard.md) - watch the bot work, live
 - [Coming from grvt_demo_bot](docs/from-grvt-demo-bot.md)
 
 ---
@@ -124,6 +125,22 @@ the strategy did not want to trade.
 sleeping `loop_interval` seconds (60 by default) between iterations. `Ctrl+C`
 always stops it cleanly.
 
+Add `--paper-walk` and the simulated price wanders instead of sitting still,
+which makes a dry run worth watching.
+
+## Watch it work
+
+```bash
+hyperbot --dry-run --paper-walk --iterations 60   # window 1
+node dashboard/server.js --open                   # window 2
+```
+
+Five nodes wired together - market data, strategy, risk gate, broker, position
+- each lighting up as the bot decides, with the price it saw and every refusal
+in plain language. It reads `logs/` and nothing else: it cannot place an order,
+and killing it does not disturb the bot. No dependencies, no build step. See
+[docs/dashboard.md](docs/dashboard.md).
+
 ## Configure
 
 ```bash
@@ -202,6 +219,8 @@ it the bot refuses to start and sends nothing.
 | `hyperbot --close --yes` | Flatten the configured symbol. |
 | `hyperbot --iterations N` | Stop after N loops. |
 | `hyperbot --log-level DEBUG` | When something is not behaving. |
+| `hyperbot --dry-run --paper-walk` | Paper trade with a price that actually moves. |
+| `node dashboard/server.js --open` | The live dashboard (read-only). |
 
 `hyperbot --help` lists everything.
 
@@ -322,6 +341,7 @@ ruff check hyperbot tests tools
 black hyperbot tests tools
 mypy hyperbot
 python tools/build_agent_files.py           # after editing anything in ai/
+cd dashboard && npm test                    # 32 dashboard tests, also offline
 ```
 
 `AGENTS.md`, `CLAUDE.md`, `.claude/` and `.github/copilot-instructions.md` are

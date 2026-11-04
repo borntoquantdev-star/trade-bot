@@ -1,0 +1,14 @@
+{
+  "name": "hyperbot-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "หน้าดูการทำงานของบอทแบบ realtime โดยอ่าน logs/audit.jsonl ที่บอทเขียนไว้",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/pipeline.test.js test/tail.test.js test/server.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import random
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,37 @@ def price_series(prices: Iterable[Number], *, loop: bool = True) -> PriceSource:
         with contextlib.suppress(StopIteration):
             last = next(stream)
         return last
+
+    return source
+
+
+def random_walk(
+    start: Number,
+    step_pct: Number = "0.08",
+    seed: int = 7,
+) -> PriceSource:
+    """A deterministic random walk around *start*, as a percentage per step.
+
+    The paper broker otherwise holds one price forever, which makes a dry run
+    useless for watching anything move - a flat line tells you nothing about
+    whether the plumbing works.  Seeded, so two runs with the same seed produce
+    the same path and a test can assert on it.
+    """
+    price = D(start)
+    step = D(step_pct) / 100
+    if price <= ZERO:
+        raise ValueError("start price must be positive")
+    if step <= ZERO:
+        raise ValueError("step_pct must be positive")
+    rng = random.Random(seed)
+    state = {"price": price}
+
+    def source(_symbol: str) -> Decimal:
+        move = D(rng.uniform(-1.0, 1.0)) * step
+        nxt = state["price"] * (D(1) + move)
+        # Never let the walk reach zero: a non-positive price is not tradable.
+        state["price"] = max(nxt, price / 100)
+        return state["price"]
 
     return source
 

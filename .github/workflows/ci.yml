@@ -31,3 +31,5 @@ jobs:
         run: python -m pytest
       - name: Generated AI files are up to date
         run: python tools/build_agent_files.py --check
+      - name: Dashboard tests
+        run: node --test dashboard/test/pipeline.test.js dashboard/test/tail.test.js dashboard/test/server.test.js

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hyperbot — dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <h1>บอทกำลังทำอะไรอยู่ <span class="sym" id="symbol"></span></h1>
+  <span class="spacer"></span>
+  <span class="live off" id="live"><span class="dot"></span><span id="liveText">กำลังต่อ...</span></span>
+</header>
+
+<div class="halt" id="halt" hidden>
+  <b>บอทหยุดตัวเองแล้ว</b> — <span id="haltReason"></span>
+  <div style="margin-top:6px;font-size:12px">
+    อ่านเหตุผลให้เข้าใจก่อน แล้วค่อยปลดด้วย <code>hyperbot --resume</code>
+  </div>
+</div>
+
+<section class="cards" id="cards"></section>
+
+<section class="section">
+  <h2>สายการทำงานของบอท</h2>
+  <div class="chain-wrap">
+    <svg class="chain-wires" id="wires" aria-hidden="true"></svg>
+    <div class="chain" id="chain"></div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>ราคาที่บอทเห็น</h2>
+  <div class="chart-box">
+    <div class="chart-head">
+      <span class="last" id="chartLast">-</span>
+      <span class="range" id="chartRange"></span>
+    </div>
+    <svg class="spark" id="spark" viewBox="0 0 600 120" preserveAspectRatio="none"
+         role="img" aria-label="กราฟราคาที่บอทสังเกตได้"></svg>
+  </div>
+</section>
+
+<section class="section"><h2>การตัดสินใจล่าสุด</h2></section>
+<div class="log" id="log"></div>
+
+<div class="empty" id="empty" hidden>
+  ยังไม่มีการตัดสินใจใน <code>logs/audit.jsonl</code>
+  <div style="margin-top:10px">ลองรันบอทแบบกระดาษก่อน</div>
+  <code>hyperbot --dry-run --iterations 30</code>
+</div>
+
+<p class="foot">
+  หน้านี้อ่านไฟล์ที่บอทเขียนเท่านั้น — สั่งอะไรบอทไม่ได้ และไม่ได้ต่อตลาดเอง ·
+  ปิดหน้านี้หรือหยุดเซิร์ฟเวอร์ไม่กระทบบอทที่กำลังรัน
+</p>
+
+<script src="lib/pipeline.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

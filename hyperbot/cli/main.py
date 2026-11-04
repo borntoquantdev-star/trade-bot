@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .. import __version__
 from ..brokers.base import BrokerError
-from ..brokers.paper import PaperBroker, fixed_price
+from ..brokers.paper import PaperBroker, fixed_price, random_walk
 from ..core.config import BotConfig, ConfigError, describe, load_config
 from ..core.engine import Engine
 from ..money import D
@@ -73,6 +73,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="send real orders; required when hyperliquid.network is 'mainnet'",
     )
     mode.add_argument("--paper-price", default="100000", help="starting price for the paper broker")
+    mode.add_argument(
+        "--paper-walk",
+        nargs="?",
+        const="0.08",
+        default=None,
+        metavar="PCT",
+        help="let the paper price wander by up to PCT%% per iteration "
+        "(default 0.08), so a dry run actually moves",
+    )
 
     actions = parser.add_argument_group("one-shot actions")
     actions.add_argument(
@@ -108,10 +117,19 @@ def _load(args: argparse.Namespace, log: logging.Logger) -> BotConfig | None:
         return None
 
 
-def _make_broker(config: BotConfig, paper: bool, log: logging.Logger, paper_price: str = "100000"):
+def _make_broker(
+    config: BotConfig,
+    paper: bool,
+    log: logging.Logger,
+    paper_price: str = "100000",
+    paper_walk: str | None = None,
+):
     if paper:
+        source = (
+            random_walk(D(paper_price), paper_walk) if paper_walk else fixed_price(D(paper_price))
+        )
         return PaperBroker(
-            price_source=fixed_price(D(paper_price)),
+            price_source=source,
             instrument=config.instrument,
             equity=config.starting_equity,
             logger=log,
@@ -159,9 +177,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "broker: %s",
         "paper (offline)" if paper else f"Hyperliquid {config.hyperliquid.network}",
     )
+    if (Path(__file__).resolve().parents[2] / "dashboard" / "server.js").exists():
+        log.info("dashboard: node dashboard/server.js --open  (reads logs/, never trades)")
 
     try:
-        broker = _make_broker(config, paper, log, args.paper_price)
+        broker = _make_broker(config, paper, log, args.paper_price, args.paper_walk)
     except (BrokerError, ConfigError) as exc:
         log.error("%s", exc)
         return 2

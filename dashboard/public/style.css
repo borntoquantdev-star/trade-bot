@@ -1,0 +1,254 @@
+/* ธีมและโครงหน้า — ถอดแบบจาก trade.css ของโปรเจค Trade Bot Designer
+ * (canvas เข้ม การ์ด node ขอบหนาเปลี่ยนสีตามสถานะ เส้นต่อเป็น SVG เส้นประ) */
+
+:root {
+  --canvas: #0b0b0b;
+  --surface: #111111;
+  --raised: #181818;
+  --border: #2e2e2e;
+  --text: #ededed;
+  --muted: #b4b4b4;
+  --accent: #5fb4ff;
+  --accent-soft: #5fb4ff22;
+  --focus: #a8d8ff;
+  --ok: #5fd39a;
+  --warn: #ffd166;
+  --bad: #ff8a8a;
+  --wire: #61b0e8;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font: 14px/1.5 "Segoe UI", system-ui, -apple-system, "Noto Sans Thai", sans-serif;
+}
+
+a { color: var(--accent); }
+
+/* ---------- แถบบน ---------- */
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 56px;
+  padding: 0 16px;
+  background: linear-gradient(#101010ee, #101010bb);
+  border-bottom: 1px solid #191919;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.top h1 { font-size: 15px; margin: 0; font-weight: 600; }
+.top .sym { color: var(--accent); font-weight: 700; }
+.spacer { flex: 1; }
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+}
+.live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.live.on .dot { background: var(--ok); box-shadow: 0 0 0 3px #5fd39a2b; }
+.live.off .dot { background: var(--bad); }
+
+/* ---------- แบนเนอร์หยุด ---------- */
+
+.halt {
+  margin: 12px 16px 0;
+  padding: 12px 14px;
+  border: 1px solid #a8413f;
+  background: #2a1414;
+  border-radius: 10px;
+  color: #ffd9d9;
+}
+.halt b { color: #ff8a8a; }
+.halt[hidden] { display: none; }
+
+/* ---------- การ์ดสรุปบัญชี ---------- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  padding: 14px 16px 4px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 13px;
+}
+.card .k { font-size: 11px; color: var(--muted); letter-spacing: 0.2px; }
+.card .v { font-size: 19px; font-weight: 650; margin-top: 3px; }
+.card .v.pos { color: var(--ok); }
+.card .v.neg { color: var(--bad); }
+.card .n { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- pipeline (สายโซ่บอท) ---------- */
+
+.section { padding: 14px 16px 0; }
+.section > h2 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 9px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.chain-wrap { position: relative; }
+.chain-wires {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.chain-wires path {
+  fill: none;
+  stroke: var(--wire);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  opacity: 0.7;
+}
+.chain-wires path.flow { animation: dash 1s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -20; } }
+
+.chain {
+  display: flex;
+  align-items: stretch;
+  gap: 26px;
+  overflow-x: auto;
+  padding: 4px 2px 10px;
+  position: relative;
+  z-index: 1;
+}
+.node {
+  flex: 1 1 0;
+  min-width: 185px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 2px solid #282828;
+}
+.node .head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.node b { color: #ffffff; font-size: 13px; }
+.node .sub { font-size: 10px; color: #7d7d7d; }
+.node .st { font-size: 11px; font-weight: 700; color: #bcb9b9; }
+.node .metric {
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  min-height: 22px;
+}
+.node small { color: var(--muted); line-height: 1.45; font-size: 11.5px; }
+
+.node.wip { border-color: var(--warn); }
+.node.wip .st { color: var(--warn); }
+.node.ready { border-color: var(--ok); }
+.node.ready .st { color: var(--ok); }
+.node.blocked { border-color: var(--bad); }
+.node.blocked .st { color: var(--bad); }
+.node.error { border-color: var(--bad); border-style: dashed; }
+.node.error .st { color: var(--bad); }
+.node.locked { border-color: #6aa7ff; border-style: dashed; }
+.node.locked .st { color: #9fd0ff; }
+.node.idle .st { color: #8a8a8a; }
+
+/* ---------- กราฟราคา ---------- */
+
+.chart-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+.chart-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.chart-head .last { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.chart-head .range { font-size: 11px; color: var(--muted); }
+.spark { width: 100%; height: 120px; display: block; color: var(--accent); }
+.spark .area { fill: var(--accent-soft); stroke: none; }
+.spark .line { fill: none; stroke: currentColor; stroke-width: 2; }
+.spark .mark { fill: var(--accent); }
+.spark .evt-order { stroke: var(--ok); stroke-width: 1.5; }
+.spark .evt-reject { stroke: var(--bad); stroke-width: 1.5; opacity: 0.55; }
+
+/* ---------- log การตัดสินใจ ---------- */
+
+.log { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 24px; }
+.row {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 11px;
+}
+.row .t { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.row .title { font-weight: 600; font-size: 13px; }
+.row .text { color: var(--muted); font-size: 12px; }
+.row .code {
+  font-size: 10.5px;
+  color: #7d7d7d;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.row.order { border-left-color: var(--ok); }
+.row.order .title { color: var(--ok); }
+.row.reject { border-left-color: var(--bad); }
+.row.reject .title { color: var(--bad); }
+.row.signal { border-left-color: var(--accent); }
+.row.error { border-left-color: var(--warn); }
+.row.error .title { color: var(--warn); }
+
+.empty {
+  margin: 16px;
+  padding: 22px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+.empty code {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 5px 9px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent);
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.foot {
+  padding: 0 16px 28px;
+  color: #6d6d6d;
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .chain { gap: 14px; }
+  .chain-wires { display: none; }
+  .node { min-width: 160px; }
+}

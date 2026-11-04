@@ -11,7 +11,7 @@ from decimal import Decimal
 import pytest
 
 from hyperbot.brokers.base import BrokerError
-from hyperbot.brokers.paper import PaperBroker, fixed_price, price_series
+from hyperbot.brokers.paper import PaperBroker, fixed_price, price_series, random_walk
 from hyperbot.core.config import load_config
 from hyperbot.core.engine import Engine, EngineState, TickResult
 from hyperbot.money import D
@@ -447,3 +447,35 @@ def test_the_strategy_sees_the_warmed_up_window(tmp_path):
     engine.tick()
     # Twenty warm-up closes plus the mark read on this tick.
     assert seen["count"] == 21
+
+
+# --- random walk (ทำให้ dry run ขยับจริง) -----------------------------------
+
+
+def test_a_seeded_walk_is_reproducible():
+    a = random_walk(100_000, "0.5", seed=11)
+    b = random_walk(100_000, "0.5", seed=11)
+    assert [a("BTC") for _ in range(5)] == [b("BTC") for _ in range(5)]
+
+
+def test_a_walk_moves_but_stays_positive():
+    source = random_walk(100_000, "0.5", seed=3)
+    prices = [source("BTC") for _ in range(200)]
+    assert len(set(prices)) > 1, "ราคาต้องขยับ ไม่ใช่เส้นตรง"
+    assert all(p > 0 for p in prices)
+
+
+def test_a_walk_step_is_bounded():
+    source = random_walk(100_000, "1", seed=5)
+    previous = D(100_000)
+    for _ in range(50):
+        price = source("BTC")
+        assert abs(price - previous) <= previous * D("0.01") + D("0.000001")
+        previous = price
+
+
+def test_a_walk_refuses_silly_inputs():
+    with pytest.raises(ValueError):
+        random_walk(0)
+    with pytest.raises(ValueError):
+        random_walk(100, "0")

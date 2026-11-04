@@ -100,6 +100,21 @@ Get-Content logs\audit.jsonl      # macOS/Linux: cat logs/audit.jsonl
 
 ⚠️ **ตอนทดลองให้ใส่ `--iterations` ด้วย** ถ้าไม่ใส่มันจะวนไปเรื่อยๆ โดยหลับ `loop_interval` วินาที (ค่า default 60) ระหว่างรอบ · กด `Ctrl+C` หยุดได้สะอาดเสมอ
 
+เติม `--paper-walk` ด้วยจะทำให้ราคาจำลองขยับ ไม่ใช่นิ่งอยู่ที่เดิม — ดูสนุกกว่าและเห็นว่าระบบทำงาน
+
+## ดูบอททำงานแบบ realtime
+
+```bash
+hyperbot --dry-run --paper-walk --iterations 60   # หน้าต่างที่ 1: บอท
+node dashboard/server.js --open                   # หน้าต่างที่ 2: dashboard
+```
+
+เปิด http://127.0.0.1:4317 จะเห็น **5 node ต่อกัน** — ข้อมูลตลาด → กลยุทธ์ → ด่านความเสี่ยง → ส่งคำสั่ง → ไม้ที่ถืออยู่ — แต่ละอันเปลี่ยนสีตามสถานะทันทีที่บอทตัดสินใจรอบใหม่ พร้อมกราฟราคาที่บอทเห็นและเหตุผลที่ถูกปฏิเสธเป็นภาษาไทย
+
+สีขอบ: เทา = รอ · เหลือง = กำลังทำ · เขียว = พร้อม · แดง = ถูกปฏิเสธ · ฟ้าประ = จำลอง (paper)
+
+dashboard **อ่านไฟล์ `logs/` ฝ่ายเดียว** สั่งอะไรบอทไม่ได้ ไม่ต่อตลาดเอง และปิดทิ้งก็ไม่กระทบบอทที่กำลังรัน · ไม่ต้อง `npm install` อะไรเลย · รายละเอียดใน [dashboard/README.md](../dashboard/README.md)
+
 ## ตั้งค่า
 
 ```powershell
@@ -175,6 +190,8 @@ hyperbot --live
 | `hyperbot --close --yes` | ปิด position ของ symbol ที่ตั้งไว้ |
 | `hyperbot --iterations N` | หยุดหลังวน N รอบ |
 | `hyperbot --log-level DEBUG` | เวลาอยากดูละเอียด |
+| `hyperbot --dry-run --paper-walk` | เทรดกระดาษแบบราคาขยับจริง |
+| `node dashboard/server.js --open` | เปิด dashboard ดูการทำงาน (อ่านอย่างเดียว) |
 
 ---
 
@@ -294,5 +311,6 @@ logs/hyperbot.log   log อ่านด้วยตาคน หมุนไฟ�
 - [docs/vscode.md](vscode.md) — ตั้งค่า VS Code และ AI ทั้งสามตัว (Codex / Claude Code / Copilot)
 - [docs/architecture.md](architecture.md) — สถาปัตยกรรมและสัญญาของ risk gate
 - [docs/strategies.md](strategies.md) — วิธีเขียนกลยุทธ์ของตัวเอง
+- [dashboard/README.md](../dashboard/README.md) — dashboard ดูบอททำงาน realtime
 - [docs/from-grvt-demo-bot.md](from-grvt-demo-bot.md) — ของเก่า grvt_demo_bot ต่างจากนี้อย่างไร
 - [ai/workflows/strategy-builder.md](../ai/workflows/strategy-builder.md) — บทสัมภาษณ์ที่ AI ใช้พาสร้างกลยุทธ์

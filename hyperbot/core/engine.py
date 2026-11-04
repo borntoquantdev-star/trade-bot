@@ -35,7 +35,7 @@ from ..brokers.base import Broker, BrokerError, OrderReceipt
 from ..money import ZERO, D
 from ..risk import Decision, explain, risk_gate
 from ..strategies.base import MarketView, Strategy
-from ..types import PortfolioState, Reject, RejectCode, Signal, SizedOrder
+from ..types import PortfolioState, Position, Reject, RejectCode, Signal, SizedOrder
 from .config import BotConfig
 
 Clock = Callable[[], datetime]
@@ -96,6 +96,8 @@ class TickResult:
     at: datetime
     price: Decimal
     equity: Decimal
+    symbol: str = ""
+    position: Position | None = None
     signal: Signal | None = None
     decision: Decision | None = None
     receipt: OrderReceipt | None = None
@@ -204,7 +206,13 @@ class Engine:
             positions = dict(self.broker.fetch_positions())
         except BrokerError as exc:
             return self._record(
-                TickResult(at=now, price=ZERO, equity=ZERO, error=f"broker read failed: {exc}")
+                TickResult(
+                    at=now,
+                    price=ZERO,
+                    equity=ZERO,
+                    symbol=symbol,
+                    error=f"broker read failed: {exc}",
+                )
             )
 
         self.prices.append(price)
@@ -234,11 +242,26 @@ class Engine:
         except Exception as exc:  # a broken strategy must not take the bot down
             self.strategy.on_error(exc)
             return self._record(
-                TickResult(at=now, price=price, equity=equity, error=f"strategy raised: {exc!r}")
+                TickResult(
+                    at=now,
+                    price=price,
+                    equity=equity,
+                    symbol=symbol,
+                    position=positions.get(symbol),
+                    error=f"strategy raised: {exc!r}",
+                )
             )
 
         if signal is None:
-            return self._record(TickResult(at=now, price=price, equity=equity))
+            return self._record(
+                TickResult(
+                    at=now,
+                    price=price,
+                    equity=equity,
+                    symbol=symbol,
+                    position=positions.get(symbol),
+                )
+            )
 
         decision = risk_gate(
             signal=signal,
@@ -248,7 +271,15 @@ class Engine:
             mark_price=price,
             now=now,
         )
-        result = TickResult(at=now, price=price, equity=equity, signal=signal, decision=decision)
+        result = TickResult(
+            at=now,
+            price=price,
+            equity=equity,
+            symbol=symbol,
+            position=positions.get(symbol),
+            signal=signal,
+            decision=decision,
+        )
 
         if isinstance(decision, Reject):
             level = (
@@ -368,9 +399,16 @@ class Engine:
             return result
         row: dict[str, Any] = {
             "at": result.at.isoformat(),
+            "symbol": result.symbol or self.config.trading.symbol,
             "price": format(result.price, "f"),
             "equity": format(result.equity, "f"),
         }
+        if result.position is not None:
+            row["position"] = {
+                "side": result.position.side.value,
+                "qty": format(result.position.qty, "f"),
+                "entry_price": format(result.position.entry_price, "f"),
+            }
         if result.signal is not None:
             row["signal"] = {
                 "side": result.signal.side.value,
