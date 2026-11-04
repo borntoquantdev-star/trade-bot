@@ -4,12 +4,12 @@ Everything here follows the published API rather than guesswork:
 
 * Prices obey two rules at once - at most 5 significant figures, and at most
   ``6 - szDecimals`` decimal places, with integer prices always accepted.
-  :meth:`hyperbot.types.InstrumentSpec.round_price` applies both; this module
+  :meth:`tradebot.types.InstrumentSpec.round_price` applies both; this module
   only derives the numbers from ``meta``.
 * Sizes are rounded to the asset's ``szDecimals``, so the lot step is
   ``10 ** -szDecimals``.
 * A client order id ("cloid") is a 128-bit hex string. Our deterministic
-  :func:`hyperbot.risk.client_order_id` is exactly 32 hex characters, so the
+  :func:`tradebot.risk.client_order_id` is exactly 32 hex characters, so the
   exchange enforces the same no-duplicates rule we do.
 * An **API wallet** signs, but account queries use the **master account
   address**. The docs call out querying with the agent address as a common

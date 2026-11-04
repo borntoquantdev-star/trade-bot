@@ -27,7 +27,7 @@ const ROW = {
 };
 
 function freshLogs() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hyperbot-dash-srv-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tradebot-dash-srv-"));
   fs.writeFileSync(path.join(dir, "audit.jsonl"), JSON.stringify(ROW) + "\n", "utf8");
   fs.writeFileSync(
     path.join(dir, "state.json"),
@@ -232,7 +232,7 @@ test("state.json ที่เปลี่ยนเป็น halted ถูกส�
 });
 
 test("โฟลเดอร์ log ที่ยังไม่มีไฟล์ ไม่ทำให้เซิร์ฟเวอร์ล่ม", async () => {
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "hyperbot-dash-empty-"));
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "tradebot-dash-empty-"));
   const srv = await startServer(empty, 4396);
   try {
     const { json } = await getJson(srv.port, "/api/snapshot");

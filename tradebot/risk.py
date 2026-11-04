@@ -235,9 +235,17 @@ def risk_gate(
             f"and {spec.price_sig_figs} significant figures",
         )
 
+    # 11. Exchange minimum order size, counted in the base asset.
+    #     GRVT publishes min_size; venues without the rule leave it at zero.
+    if spec.min_qty > ZERO and qty < spec.min_qty:
+        return Reject(
+            RejectCode.BELOW_MIN_SIZE,
+            f"order size {qty} is below the exchange minimum {spec.min_qty} " f"for {spec.symbol}",
+        )
+
     notional = qty * limit_price
 
-    # 11. Exchange minimum order value.
+    # 12. Exchange minimum order value.
     if notional < spec.min_notional:
         return Reject(
             RejectCode.BELOW_MIN_NOTIONAL,
@@ -245,7 +253,7 @@ def risk_gate(
             f"{spec.min_notional} for {spec.symbol}",
         )
 
-    # 12. Total exposure ceiling (the only place leverage is enforced).
+    # 13. Total exposure ceiling (the only place leverage is enforced).
     leverage_cap = min(limits.max_leverage, spec.max_leverage)
     exposure_cap = state.equity * leverage_cap
     new_exposure = state.gross_exposure + notional

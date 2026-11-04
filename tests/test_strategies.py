@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from hyperbot.money import D
-from hyperbot.strategies import STRATEGIES, UnknownStrategy, build_strategy, describe_strategies
-from hyperbot.strategies.base import MarketView
-from hyperbot.strategies.ma_cross import MaCrossStrategy, sma
-from hyperbot.strategies.random_strategy import RandomStrategy
-from hyperbot.types import Position, Side
+from tradebot.money import D
+from tradebot.strategies import STRATEGIES, UnknownStrategy, build_strategy, describe_strategies
+from tradebot.strategies.base import MarketView
+from tradebot.strategies.ma_cross import MaCrossStrategy, sma
+from tradebot.strategies.random_strategy import RandomStrategy
+from tradebot.types import Position, Side
 
 SYMBOL = "BTC_USDT_Perp"
 NOW = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)

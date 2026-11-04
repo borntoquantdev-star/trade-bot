@@ -1,5 +1,5 @@
 {
-  "name": "hyperbot-dashboard",
+  "name": "tradebot-dashboard",
   "version": "1.0.0",
   "private": true,
   "description": "หน้าดูการทำงานของบอทแบบ realtime โดยอ่าน logs/audit.jsonl ที่บอทเขียนไว้",

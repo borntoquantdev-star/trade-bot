@@ -1,27 +1,29 @@
 """Configuration: YAML file, then environment variables, then validation.
 
-Three bugs from the project this grew out of are fixed here, and each one has
-a regression test in ``tests/test_config.py``:
+One bot, two exchanges. ``exchange:`` picks which broker runs; each venue keeps
+its own credential block, because their shapes have nothing in common:
+
+* **GRVT** - API key + private key + trading account id, symbols like
+  ``BTC_USDT_Perp``, integer client order ids, a published ``min_size``.
+* **Hyperliquid** - a master account address plus an API wallet key that only
+  signs, symbols like ``BTC``, 128-bit hex client order ids, prices capped at
+  five significant figures.
+
+Instrument defaults follow the chosen exchange, so a config that only says
+``exchange: grvt`` still has sensible tick and lot sizes to paper trade with.
+
+Three bugs from the project this grew out of are fixed here, each with a
+regression test in ``tests/test_config.py``:
 
 1. The defaults were copied shallowly, so merging a file into one config
    object rewrote the class-level defaults and leaked credentials into every
    later object. Defaults are deep-copied.
 2. ``__repr__`` masked a shallow copy, which overwrote the live credentials
-   with the literal string ``***MASKED***``. Printing a config destroyed it.
-   Secrets are wrapped in :class:`Secret`, so masking is structural and no
-   copy has to be remembered.
+   with the literal string ``***MASKED***``. Secrets are wrapped in
+   :class:`Secret`, so masking is structural.
 3. Percentages were read as whole numbers in some places and fractions in
-   others. The YAML stays human-friendly (``1.0`` means 1%) and this module
-   is the single point of conversion.
-
-Hyperliquid splits the account into two values that are easy to confuse, so
-they are separate settings here:
-
-* ``account_address`` - the **master** account. Positions and equity are
-  looked up by this address. The API docs call out querying with the agent
-  address instead as a common mistake that silently returns nothing.
-* ``api_wallet_key`` - the private key of an **API wallet** approved by that
-  master account. It only signs.
+   others. The YAML stays human-friendly (``1.0`` means 1%) and this module is
+   the single point of conversion.
 """
 
 from __future__ import annotations
@@ -37,28 +39,67 @@ from typing import Any
 
 import yaml
 
-from ..brokers.hyperliquid import INTERVALS
 from ..money import D, pct
 from ..types import InstrumentSpec, RiskLimits
 
 _ENV_PATTERN = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
-VALID_NETWORKS = ("testnet", "mainnet")
+EXCHANGES = ("grvt", "hyperliquid")
+GRVT_ENVS = ("testnet", "prod")
+HYPERLIQUID_NETWORKS = ("testnet", "mainnet")
+
+#: Candle intervals both venues accept.
+INTERVALS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w")
+
+#: What each venue looks like when nothing is configured. Paper trading uses
+#: these; a live session replaces them with the exchange's own metadata.
+EXCHANGE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "grvt": {
+        "symbol": "BTC_USDT_Perp",
+        "instrument": {
+            "tick_size": 0.1,
+            "lot_step": 0.001,
+            "min_notional_usdt": 500,
+            "min_qty": 0.001,
+            "max_leverage": 20,
+            # GRVT uses a plain tick; no significant-figure rule.
+            "price_sig_figs": 0,
+        },
+    },
+    "hyperliquid": {
+        "symbol": "BTC",
+        "instrument": {
+            # BTC has szDecimals 5: lot step 1e-5, at most 6 - 5 = 1 price decimal.
+            "tick_size": 0.1,
+            "lot_step": 0.00001,
+            "min_notional_usdt": 10,
+            "min_qty": 0,
+            "max_leverage": 40,
+            "price_sig_figs": 5,
+        },
+    },
+}
 
 DEFAULTS: dict[str, Any] = {
+    "exchange": "grvt",
+    "grvt": {
+        "env": "testnet",
+        "api_key": "",
+        "private_key": "",
+        "trading_account_id": "",
+        "sub_account_id": "0",
+    },
     "hyperliquid": {
         "network": "testnet",
         # The MASTER account address, used for every account query.
         "account_address": "",
         # An API wallet private key. Signs only; never queried.
         "api_wallet_key": "",
-        # Optional: trade on behalf of a vault.
         "vault_address": "",
     },
     "trading": {
-        # Hyperliquid perps are named by coin: BTC, ETH, SOL...
-        "symbol": "BTC",
-        # Candle interval used to warm the strategy up at start-up.
+        # Empty means "use the chosen exchange's default symbol".
+        "symbol": "",
         "timeframe": "5m",
         "loop_interval": 60,
         "strategy": "random",
@@ -72,37 +113,34 @@ DEFAULTS: dict[str, Any] = {
         "max_drawdown_pct": 10.0,
         "max_leverage": 5,
         "max_slippage_pct": 0.1,
-        "fee_rate_pct": 0.045,
+        "fee_rate_pct": 0.05,
         "allow_short": True,
         "starting_equity_usdt": 10000,
     },
-    "instrument": {
-        # Fallbacks for paper trading. A live session reads the real values
-        # from the exchange's perp metadata instead.
-        # BTC has szDecimals 5, so the lot step is 1e-5 and prices may carry
-        # at most 6 - 5 = 1 decimal place.
-        "tick_size": 0.1,
-        "lot_step": 0.00001,
-        "min_notional_usdt": 10,
-        "max_leverage": 40,
-        "price_sig_figs": 5,
-    },
+    # Empty means "inherit from the chosen exchange".
+    "instrument": {},
 }
 
 ENV_OVERRIDES: dict[str, tuple[str, str]] = {
+    "TRADEBOT_EXCHANGE": ("", "exchange"),
+    "GRVT_ENV": ("grvt", "env"),
+    "GRVT_API_KEY": ("grvt", "api_key"),
+    "GRVT_PRIVATE_KEY": ("grvt", "private_key"),
+    "GRVT_TRADING_ACCOUNT_ID": ("grvt", "trading_account_id"),
+    "GRVT_SUB_ACCOUNT_ID": ("grvt", "sub_account_id"),
     "HYPERLIQUID_NETWORK": ("hyperliquid", "network"),
     "HYPERLIQUID_ACCOUNT_ADDRESS": ("hyperliquid", "account_address"),
     "HYPERLIQUID_API_WALLET_KEY": ("hyperliquid", "api_wallet_key"),
     "HYPERLIQUID_VAULT_ADDRESS": ("hyperliquid", "vault_address"),
-    "HYPERBOT_SYMBOL": ("trading", "symbol"),
-    "HYPERBOT_TIMEFRAME": ("trading", "timeframe"),
-    "HYPERBOT_LOOP_INTERVAL": ("trading", "loop_interval"),
-    "HYPERBOT_STRATEGY": ("trading", "strategy"),
-    "HYPERBOT_RISK_PER_TRADE_PCT": ("risk", "risk_per_trade_pct"),
-    "HYPERBOT_MAX_POSITIONS": ("risk", "max_positions"),
-    "HYPERBOT_MAX_DAILY_LOSS_PCT": ("risk", "max_daily_loss_pct"),
-    "HYPERBOT_MAX_DRAWDOWN_PCT": ("risk", "max_drawdown_pct"),
-    "HYPERBOT_MAX_LEVERAGE": ("risk", "max_leverage"),
+    "TRADEBOT_SYMBOL": ("trading", "symbol"),
+    "TRADEBOT_TIMEFRAME": ("trading", "timeframe"),
+    "TRADEBOT_LOOP_INTERVAL": ("trading", "loop_interval"),
+    "TRADEBOT_STRATEGY": ("trading", "strategy"),
+    "TRADEBOT_RISK_PER_TRADE_PCT": ("risk", "risk_per_trade_pct"),
+    "TRADEBOT_MAX_POSITIONS": ("risk", "max_positions"),
+    "TRADEBOT_MAX_DAILY_LOSS_PCT": ("risk", "max_daily_loss_pct"),
+    "TRADEBOT_MAX_DRAWDOWN_PCT": ("risk", "max_drawdown_pct"),
+    "TRADEBOT_MAX_LEVERAGE": ("risk", "max_leverage"),
 }
 
 
@@ -147,8 +185,23 @@ class Secret:
 
 
 @dataclass(frozen=True)
+class GrvtSettings:
+    """GRVT connection settings."""
+
+    env: str = "testnet"
+    api_key: Secret = field(default_factory=Secret)
+    private_key: Secret = field(default_factory=Secret)
+    trading_account_id: Secret = field(default_factory=Secret)
+    sub_account_id: str = "0"
+
+    @property
+    def is_live(self) -> bool:
+        return self.env == "prod"
+
+
+@dataclass(frozen=True)
 class HyperliquidSettings:
-    """Exchange connection settings."""
+    """Hyperliquid connection settings."""
 
     network: str = "testnet"
     account_address: Secret = field(default_factory=Secret)
@@ -157,7 +210,6 @@ class HyperliquidSettings:
 
     @property
     def is_live(self) -> bool:
-        """True on mainnet, where orders cost real money."""
         return self.network == "mainnet"
 
 
@@ -165,7 +217,7 @@ class HyperliquidSettings:
 class TradingSettings:
     """What to trade and how often to look."""
 
-    symbol: str = "BTC"
+    symbol: str = "BTC_USDT_Perp"
     timeframe: str = "5m"
     loop_interval: int = 60
     strategy: str = "random"
@@ -176,6 +228,8 @@ class TradingSettings:
 class BotConfig:
     """The whole configuration, parsed and validated."""
 
+    exchange: str
+    grvt: GrvtSettings
     hyperliquid: HyperliquidSettings
     trading: TradingSettings
     risk: RiskLimits
@@ -183,12 +237,41 @@ class BotConfig:
     starting_equity: Decimal
     source: str = "<defaults>"
 
+    @property
+    def venue(self) -> GrvtSettings | HyperliquidSettings:
+        """The settings block for the exchange actually in use."""
+        return self.grvt if self.exchange == "grvt" else self.hyperliquid
+
+    @property
+    def venue_name(self) -> str:
+        """The environment name of the chosen venue, for logs."""
+        return self.grvt.env if self.exchange == "grvt" else self.hyperliquid.network
+
+    @property
+    def is_live(self) -> bool:
+        """True when the chosen venue points at real money."""
+        return self.venue.is_live
+
     def require_live_credentials(self) -> None:
         """Raise unless everything needed to trade for real is present.
 
         Paper trading deliberately does not call this: ``--dry-run`` must work
         with no credentials at all.
         """
+        if self.exchange == "grvt":
+            missing = [
+                name
+                for name in ("api_key", "private_key", "trading_account_id")
+                if not getattr(self.grvt, name)
+            ]
+            if missing:
+                raise ConfigError(
+                    "live trading on GRVT needs grvt."
+                    + ", grvt.".join(missing)
+                    + f" - set them in {self.source} or as environment variables"
+                )
+            return
+
         missing = [
             name
             for name in ("account_address", "api_wallet_key")
@@ -196,7 +279,7 @@ class BotConfig:
         ]
         if missing:
             raise ConfigError(
-                "live trading needs hyperliquid."
+                "live trading on Hyperliquid needs hyperliquid."
                 + ", hyperliquid.".join(missing)
                 + f" - set them in {self.source} or as environment variables. "
                 "account_address is the MASTER account; api_wallet_key is the "
@@ -293,18 +376,42 @@ def load_config(
 
     environ = os.environ if env is None else env
     for var, (section, key) in ENV_OVERRIDES.items():
-        if environ.get(var) not in (None, ""):
+        if environ.get(var) in (None, ""):
+            continue
+        if section:
             merged[section][key] = environ[var]
+        else:
+            merged[key] = environ[var]
 
     return _build(merged, source)
 
 
 def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
+    exchange = str(raw.get("exchange", "grvt")).strip().lower()
+    if exchange not in EXCHANGES:
+        raise ConfigError(f"exchange must be one of {EXCHANGES}, got {exchange!r}")
+    venue_defaults = EXCHANGE_DEFAULTS[exchange]
+
+    # --- GRVT ---
+    grvt_raw = raw.get("grvt", {})
+    grvt_env = str(grvt_raw.get("env", "testnet")).strip().lower()
+    if grvt_env not in GRVT_ENVS:
+        raise ConfigError(f"grvt.env must be one of {GRVT_ENVS}, got {grvt_env!r}")
+    grvt = GrvtSettings(
+        env=grvt_env,
+        api_key=Secret(grvt_raw.get("api_key", "")),
+        private_key=Secret(grvt_raw.get("private_key", "")),
+        trading_account_id=Secret(grvt_raw.get("trading_account_id", "")),
+        sub_account_id=str(grvt_raw.get("sub_account_id", "0")),
+    )
+
+    # --- Hyperliquid ---
     hl_raw = raw.get("hyperliquid", {})
     network = str(hl_raw.get("network", "testnet")).strip().lower()
-    if network not in VALID_NETWORKS:
-        raise ConfigError(f"hyperliquid.network must be one of {VALID_NETWORKS}, got {network!r}")
-
+    if network not in HYPERLIQUID_NETWORKS:
+        raise ConfigError(
+            f"hyperliquid.network must be one of {HYPERLIQUID_NETWORKS}, got {network!r}"
+        )
     address = str(hl_raw.get("account_address", "") or "")
     if address and not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
         raise ConfigError(
@@ -312,7 +419,6 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
             f"(got {len(address)} characters). This is the master account "
             "address, not a private key."
         )
-
     hyperliquid = HyperliquidSettings(
         network=network,
         account_address=Secret(address),
@@ -320,6 +426,7 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
         vault_address=Secret(hl_raw.get("vault_address", "")),
     )
 
+    # --- trading ---
     trading_raw = raw.get("trading", {})
     loop_interval = _as_int(trading_raw.get("loop_interval", 60), "trading.loop_interval")
     if loop_interval < 1:
@@ -332,16 +439,19 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
     warmup = _as_int(trading_raw.get("warmup_candles", 200), "trading.warmup_candles")
     if warmup < 0:
         raise ConfigError("trading.warmup_candles cannot be negative")
+
+    symbol = str(trading_raw.get("symbol", "") or "").strip() or venue_defaults["symbol"]
+    _check_symbol_shape(exchange, symbol)
+
     trading = TradingSettings(
-        symbol=str(trading_raw.get("symbol", "BTC")).strip(),
+        symbol=symbol,
         timeframe=timeframe,
         loop_interval=loop_interval,
         strategy=str(trading_raw.get("strategy", "random")),
         warmup_candles=warmup,
     )
-    if not trading.symbol:
-        raise ConfigError("trading.symbol cannot be empty")
 
+    # --- risk ---
     risk_raw = raw.get("risk", {})
     try:
         risk = RiskLimits(
@@ -359,23 +469,23 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
             max_slippage=pct(
                 _as_decimal(risk_raw.get("max_slippage_pct", 0.1), "risk.max_slippage_pct")
             ),
-            fee_rate=pct(_as_decimal(risk_raw.get("fee_rate_pct", 0.045), "risk.fee_rate_pct")),
+            fee_rate=pct(_as_decimal(risk_raw.get("fee_rate_pct", 0.05), "risk.fee_rate_pct")),
             allow_short=bool(risk_raw.get("allow_short", True)),
         )
     except ValueError as exc:
         raise ConfigError(f"risk settings are not usable: {exc}") from exc
 
-    inst_raw = raw.get("instrument", {})
+    # --- instrument: start from the venue's defaults, then the user's values ---
+    inst_raw = {**venue_defaults["instrument"], **(raw.get("instrument") or {})}
     try:
         instrument = InstrumentSpec.build(
-            trading.symbol,
-            tick_size=_as_decimal(inst_raw.get("tick_size", "0.1"), "instrument.tick_size"),
-            lot_step=_as_decimal(inst_raw.get("lot_step", "0.00001"), "instrument.lot_step"),
-            min_notional=_as_decimal(
-                inst_raw.get("min_notional_usdt", 10), "instrument.min_notional_usdt"
-            ),
-            max_leverage=_as_decimal(inst_raw.get("max_leverage", 40), "instrument.max_leverage"),
-            price_sig_figs=_as_int(inst_raw.get("price_sig_figs", 5), "instrument.price_sig_figs"),
+            symbol,
+            tick_size=_as_decimal(inst_raw["tick_size"], "instrument.tick_size"),
+            lot_step=_as_decimal(inst_raw["lot_step"], "instrument.lot_step"),
+            min_notional=_as_decimal(inst_raw["min_notional_usdt"], "instrument.min_notional_usdt"),
+            max_leverage=_as_decimal(inst_raw["max_leverage"], "instrument.max_leverage"),
+            price_sig_figs=_as_int(inst_raw["price_sig_figs"], "instrument.price_sig_figs"),
+            min_qty=_as_decimal(inst_raw.get("min_qty", 0), "instrument.min_qty"),
         )
     except ValueError as exc:
         raise ConfigError(f"instrument settings are not usable: {exc}") from exc
@@ -387,6 +497,8 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
         raise ConfigError("risk.starting_equity_usdt must be positive")
 
     return BotConfig(
+        exchange=exchange,
+        grvt=grvt,
         hyperliquid=hyperliquid,
         trading=trading,
         risk=risk,
@@ -396,17 +508,42 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
     )
 
 
+def _check_symbol_shape(exchange: str, symbol: str) -> None:
+    """Catch a symbol written for the other venue before it reaches the API.
+
+    GRVT names instruments like ``BTC_USDT_Perp``; Hyperliquid uses the bare
+    coin, ``BTC``. Sending one to the other fails with an unhelpful error, so
+    it is worth refusing here where the message can say what to write instead.
+    """
+    if not symbol:
+        raise ConfigError("trading.symbol cannot be empty")
+    if exchange == "grvt" and "_" not in symbol:
+        raise ConfigError(
+            f"trading.symbol {symbol!r} does not look like a GRVT instrument. "
+            "GRVT uses names like BTC_USDT_Perp; the bare coin is Hyperliquid's style."
+        )
+    if exchange == "hyperliquid" and "_" in symbol:
+        raise ConfigError(
+            f"trading.symbol {symbol!r} does not look like a Hyperliquid perp. "
+            "Hyperliquid uses the coin on its own, such as BTC or ETH."
+        )
+
+
 def describe(config: BotConfig) -> str:
     """A multi-line summary safe to print or log (secrets stay masked)."""
-    address = config.hyperliquid.account_address
-    shown = address.reveal()[:6] + "..." + address.reveal()[-4:] if address else "not set"
+    if config.exchange == "grvt":
+        where = f"GRVT {config.grvt.env}"
+        who = f"  account         {config.grvt.trading_account_id}"
+    else:
+        address = config.hyperliquid.account_address
+        shown = address.reveal()[:6] + "..." + address.reveal()[-4:] if address else "not set"
+        where = f"Hyperliquid {config.hyperliquid.network}"
+        who = f"  account         {shown}"
     return "\n".join(
         [
             f"  source            {config.source}",
-            f"  network           {config.hyperliquid.network}"
-            + ("  *** REAL MONEY ***" if config.hyperliquid.is_live else ""),
-            f"  account           {shown}",
-            f"  api wallet key    {config.hyperliquid.api_wallet_key}",
+            f"  exchange          {where}" + ("  *** REAL MONEY ***" if config.is_live else ""),
+            who,
             f"  symbol            {config.trading.symbol} ({config.trading.timeframe} candles)",
             f"  strategy          {config.trading.strategy}",
             f"  loop interval     {config.trading.loop_interval}s",
@@ -419,7 +556,8 @@ def describe(config: BotConfig) -> str:
             f"  slippage cap      {config.risk.max_slippage * 100}%",
             f"  short selling     {'allowed' if config.risk.allow_short else 'blocked'}",
             f"  tick / lot / min  {config.instrument.tick_size} / "
-            f"{config.instrument.lot_step} / {config.instrument.min_notional}",
+            f"{config.instrument.lot_step} / {config.instrument.min_notional}"
+            + (f" (min size {config.instrument.min_qty})" if config.instrument.min_qty else ""),
         ]
     )
 
@@ -427,6 +565,8 @@ def describe(config: BotConfig) -> str:
 __all__ = [
     "BotConfig",
     "ConfigError",
+    "EXCHANGES",
+    "GrvtSettings",
     "HyperliquidSettings",
     "Secret",
     "TradingSettings",

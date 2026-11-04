@@ -10,15 +10,15 @@ from decimal import Decimal
 
 import pytest
 
-from hyperbot.brokers.base import BrokerError
-from hyperbot.brokers.paper import PaperBroker, fixed_price, price_series, random_walk
-from hyperbot.core.config import load_config
-from hyperbot.core.engine import Engine, EngineState, TickResult
-from hyperbot.money import D
-from hyperbot.strategies.base import MarketView, Strategy
-from hyperbot.types import RejectCode, Signal
+from tradebot.brokers.base import BrokerError
+from tradebot.brokers.paper import PaperBroker, fixed_price, price_series, random_walk
+from tradebot.core.config import load_config
+from tradebot.core.engine import Engine, EngineState, TickResult
+from tradebot.money import D
+from tradebot.strategies.base import MarketView, Strategy
+from tradebot.types import RejectCode, Signal
 
-SYMBOL = "BTC"
+SYMBOL = "BTC_USDT_Perp"
 START = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)
 
 
@@ -324,7 +324,7 @@ def test_the_paper_broker_tracks_pnl_on_close(tmp_path):
 def test_the_paper_broker_refuses_a_second_position():
     config = load_config(env={})
     broker = PaperBroker(fixed_price(100), config.instrument)
-    from hyperbot.types import Side, SizedOrder
+    from tradebot.types import Side, SizedOrder
 
     order = SizedOrder("id", config.trading.symbol, Side.BUY, D(1), D(100), D(99), None, D(1), "x")
     broker.place_order(order)

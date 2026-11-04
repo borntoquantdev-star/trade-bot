@@ -70,7 +70,8 @@ that same order, so a log line answers "what stopped the bot" rather than
 ```
 halted → max_drawdown → daily_loss_limit → expired → short_not_allowed
 → invalid_stop → slippage_exceeded → already_in_position → too_many_positions
-→ qty_rounds_to_zero → below_min_notional → exceeds_exposure → bad_instrument
+→ qty_rounds_to_zero → below_min_size → below_min_notional → exceeds_exposure
+→ bad_instrument
 ```
 
 `docs/README.th.md` has the table of what each one means in practice.
@@ -89,13 +90,38 @@ instrument than realised P&L.
 
 Drawdown is measured from the highest equity ever recorded in that file.
 
-## Prices: two rules at once
+## Venue quirks live in the broker, never in the gate
+
+Two exchanges, one gate. Everything a venue does differently is absorbed by
+its broker and by `InstrumentSpec`, so `risk_gate` never learns an exchange's
+name:
+
+| | GRVT | Hyperliquid |
+|---|---|---|
+| Symbols | `BTC_USDT_Perp` | `BTC` |
+| Price rule | plain tick | 5 significant figures **and** `6 - szDecimals` decimals |
+| Lot step | `10 ** -base_decimals` | `10 ** -szDecimals` |
+| Minimum | a value **and** a published `min_size` | a value only |
+| Client order id | uint32 | 128-bit hex |
+| Leverage via API | no | yes, but the bot does not call it |
+
+The client order id is the clearest case. `client_order_id()` produces one
+canonical hex string from the signal; the GRVT broker folds it to a uint32
+because the SDK does `int(...)` on it, and the Hyperliquid broker prefixes
+`0x`. Same signal, same id, two wire formats, and the gate is untouched.
+
+`min_size` is why `InstrumentSpec` carries `min_qty` and the gate has a
+`below_min_size` refusal: GRVT rejects an order under it, so the bot should
+refuse first and say why.
+
+## Prices: Hyperliquid's two rules at once
 
 Hyperliquid perps cap prices at **5 significant figures** *and* at
 **`6 - szDecimals` decimal places**, with integer prices always accepted. One
 tick size cannot express that, because the allowed increment depends on the
 price's magnitude: near 100,000 only whole numbers fit in five figures, while
-near 1,000 a tenth does.
+near 1,000 a tenth does. GRVT has no such rule, so its broker sets
+`price_sig_figs = 0` and the same code falls back to a plain tick.
 
 `InstrumentSpec.round_price` therefore takes the coarser of two steps - the
 tick from `6 - szDecimals`, and the one implied by the significant-figure
@@ -146,9 +172,9 @@ different thing and the one it can guarantee by itself.
 
 | You want to | Touch |
 |---|---|
-| A new trading rule | `hyperbot/strategies/`, register it in `__init__.py` |
+| A new trading rule | `tradebot/strategies/`, register it in `__init__.py` |
 | A new refusal reason | `RejectCode` (in severity order) + `risk_gate` + a test |
-| Another exchange | `hyperbot/brokers/`, implement the `Broker` protocol |
+| Another exchange | `tradebot/brokers/`, implement the `Broker` protocol, register it in `build_live_broker` |
 | OHLCV in strategies | Widen `MarketView` to carry `Candle` objects |
 | A backtest | A new runner calling the existing `risk_gate` |
 

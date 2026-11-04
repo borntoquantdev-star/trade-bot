@@ -11,7 +11,7 @@ const path = require("node:path");
 const { readNew, readJson } = require("../lib/tail.js");
 
 function tmpFile(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hyperbot-dash-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tradebot-dash-"));
   return path.join(dir, name || "audit.jsonl");
 }
 

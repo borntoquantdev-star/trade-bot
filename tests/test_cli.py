@@ -1,34 +1,49 @@
 """CLI tests.
 
-These call :func:`hyperbot.cli.main.main` directly with argument lists, so they
+These call :func:`tradebot.cli.main.main` directly with argument lists, so they
 cover the paths a user actually types - including the ones that must refuse to
 do anything.
 """
 
 import pytest
 
-from hyperbot.cli.main import build_parser, main
+from tradebot.cli.main import build_parser, main
 
 TESTNET_CONFIG = """
-hyperliquid:
-  network: testnet
+exchange: grvt
+grvt:
+  env: testnet
 trading:
-  symbol: BTC
+  symbol: BTC_USDT_Perp
   loop_interval: 1
   warmup_candles: 5
 """
 
 SECRET_CONFIG = """
-hyperliquid:
-  network: testnet
-  api_wallet_key: SUPERSECRET
+exchange: grvt
+grvt:
+  env: testnet
+  api_key: SUPERSECRET
 trading:
-  symbol: BTC
+  symbol: BTC_USDT_Perp
   loop_interval: 1
   warmup_candles: 0
 """
 
 MAINNET_CONFIG = """
+exchange: grvt
+grvt:
+  env: prod
+  api_key: k
+  private_key: p
+  trading_account_id: a
+trading:
+  symbol: BTC_USDT_Perp
+  loop_interval: 1
+"""
+
+HYPERLIQUID_CONFIG = """
+exchange: hyperliquid
 hyperliquid:
   network: mainnet
   account_address: "0x1234567890abcdef1234567890abcdef12345678"
@@ -61,7 +76,7 @@ def paths(tmp_path):
 
 
 def test_the_parser_builds():
-    assert build_parser().prog == "hyperbot"
+    assert build_parser().prog == "tradebot"
 
 
 def test_listing_strategies_needs_no_config(capsys):
@@ -210,3 +225,29 @@ def test_the_configuration_is_logged_without_secrets(tmp_path, config_file, caps
     # The config block really was printed, and the key was not in it.
     assert "configuration:" in out
     assert "SUPERSECRET" not in out
+
+
+def test_the_exchange_is_reported_and_mainnet_still_needs_live(tmp_path, config_file, capsys):
+    """สลับตลาดได้ด้วย config ช่องเดียว และด่าน --live ยังทำงานทั้งสองฝั่ง"""
+    code = main(
+        ["--config", config_file(HYPERLIQUID_CONFIG), "--iterations", "1", *paths(tmp_path)]
+    )
+    out = capsys.readouterr().out
+    assert code == 2
+    assert "--live was not passed" in out
+    assert "hyperliquid" in out
+
+
+def test_a_grvt_config_runs_on_paper(tmp_path, config_file, capsys):
+    code = main(
+        [
+            "--config",
+            config_file(TESTNET_CONFIG),
+            "--dry-run",
+            "--iterations",
+            "2",
+            *paths(tmp_path),
+        ]
+    )
+    assert code == 0
+    assert "BTC_USDT_Perp" in capsys.readouterr().out

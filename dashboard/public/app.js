@@ -13,8 +13,8 @@
 
   const $ = (id) => document.getElementById(id);
   const SVG = "http://www.w3.org/2000/svg";
-  const LAYOUT_KEY = "hyperbot.canvas.layout.v1";
-  const CAMERA_KEY = "hyperbot.canvas.camera.v1";
+  const LAYOUT_KEY = "tradebot.canvas.layout.v1";
+  const CAMERA_KEY = "tradebot.canvas.camera.v1";
 
   const STATE_TH = {
     idle: "รอ",
@@ -495,7 +495,7 @@
           { class: "hint-empty" },
           el("div", { text: "ยังไม่มีการตัดสินใจที่น่าบันทึก" }),
           el("div", { text: "ลองรันบอทแบบกระดาษ แล้วหน้านี้จะขยับเอง" }),
-          el("code", { text: "hyperbot --dry-run --paper-walk --iterations 60" })
+          el("code", { text: "tradebot --dry-run --paper-walk --iterations 60" })
         )
       );
       return;

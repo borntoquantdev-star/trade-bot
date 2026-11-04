@@ -17,7 +17,7 @@ answer is in the configuration, the account or the strategy, not in the gate.
 
 ```bash
 tail -20 logs/audit.jsonl
-hyperbot --doctor
+tradebot --doctor
 ```
 
 Each line of `audit.jsonl` is one decision. Refusals look like:
@@ -42,14 +42,14 @@ one that applies.
 
 | code | what it means | what to do |
 |---|---|---|
-| `halted` | The bot stopped itself and wrote the reason to `logs/state.json`. | Read `halt_reason`. Understand it, then `hyperbot --resume`. Never resume without reading it. |
+| `halted` | The bot stopped itself and wrote the reason to `logs/state.json`. | Read `halt_reason`. Understand it, then `tradebot --resume`. Never resume without reading it. |
 | `max_drawdown` | Equity fell `risk.max_drawdown_pct` below its peak. | This is the kill switch. Stop and review the strategy; do not raise the limit to keep trading. |
 | `daily_loss_limit` | Equity dropped more than `risk.max_daily_loss_pct` since 00:00 UTC. | Resets at the next UTC midnight. Note that it measures *all* equity change, including trades made by hand. |
 | `expired` | The signal was older than its `valid_for` when it reached the gate. | Usually a slow loop or a long broker call. Check `loop_interval` and the logs for retries. |
 | `short_not_allowed` | The strategy asked to sell with `risk.allow_short: false`. | Either allow shorts or make the strategy long-only. |
 | `invalid_stop` | The stop was on the wrong side of entry, closer than one tick, or the take profit was on the losing side. | A bug in the strategy. Fix the strategy, add a test. |
 | `slippage_exceeded` | Price moved against the signal by more than `risk.max_slippage_pct` before the gate ran. | Normal in fast markets. Persistent cases mean the loop is too slow for the symbol. |
-| `already_in_position` | Something is already open on that symbol. | By design: this bot never stacks. Check whether an old position is still open: `hyperbot --doctor`. |
+| `already_in_position` | Something is already open on that symbol. | By design: this bot never stacks. Check whether an old position is still open: `tradebot --doctor`. |
 | `too_many_positions` | `risk.max_positions` reached. | Expected with multiple symbols; raise it only deliberately. |
 | `qty_rounds_to_zero` | The risk budget cannot buy one `lot_step`. | Account too small for that stop distance. Widen the stop, raise `risk_per_trade_pct`, or add funds. |
 | `below_min_notional` | The order is smaller than the exchange accepts. | The most common refusal on a small account. Same three options as above; the honest answer is often "this account is too small for this symbol". |
@@ -59,7 +59,7 @@ one that applies.
 ## Step 3 — if there are no signals at all
 
 ```bash
-hyperbot --dry-run --strategy <name> --iterations 50
+tradebot --dry-run --strategy <name> --iterations 50
 ```
 
 Then check, in order:

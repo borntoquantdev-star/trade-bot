@@ -48,7 +48,7 @@ Dashboard ของบอท — ดูการทำงานแบบ realtim
   --help
 
 ต้องมีบอทเขียน log ไว้ก่อน ถ้ายังไม่มีอะไรเลยให้ลองรัน
-  hyperbot --dry-run --iterations 30
+  tradebot --dry-run --iterations 30
 `;
 
 function parseArgs(argv) {
@@ -243,7 +243,7 @@ function main() {
     console.log(`
 Dashboard พร้อมแล้ว   ${url}
 เฝ้าไฟล์ที่            ${opts.logs}
-${exists ? "" : "ยังไม่มี audit.jsonl — ลองรัน  hyperbot --dry-run --iterations 30\n"}กด Ctrl+C เพื่อหยุด (ไม่กระทบบอทที่กำลังรันอยู่)
+${exists ? "" : "ยังไม่มี audit.jsonl — ลองรัน  tradebot --dry-run --iterations 30\n"}กด Ctrl+C เพื่อหยุด (ไม่กระทบบอทที่กำลังรันอยู่)
 `);
     if (opts.open) {
       const cmd = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";

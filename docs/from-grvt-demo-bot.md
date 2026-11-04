@@ -2,8 +2,10 @@
 
 This project started as
 [grvt_demo_bot](https://github.com/borntoquantdev-star/grvt_demo_bot), a demo
-bot for GRVT. It is now a Hyperliquid bot with a rewritten core. If you have
-code or notes from that repository, this is what changed.
+bot for GRVT. The core was rewritten, Hyperliquid support was added, and GRVT
+came back as a first-class broker - so it now trades either venue from one
+config line. If you have code or notes from that repository, this is what
+changed.
 
 ## Why it was rewritten rather than patched
 
@@ -35,16 +37,16 @@ could stack 500 USDT at 10x every 60 seconds without limit.
 
 ## The exchange
 
-| | grvt_demo_bot | hyperbot |
+| | grvt_demo_bot | tradebot |
 |---|---|---|
-| Exchange | GRVT | Hyperliquid |
-| Symbols | `BTC_USDT_Perp` | `BTC`, `ETH`, `SOL` - coin names |
-| SDK | `grvt-pysdk` (vendored, missing) | `hyperliquid-python-sdk`, optional extra |
+| Exchange | GRVT only | GRVT **or** Hyperliquid, chosen in config |
+| Symbols | `BTC_USDT_Perp` | same on GRVT; bare coins on Hyperliquid |
+| SDK | `grvt-pysdk` (vendored, missing) | `grvt-pysdk` or `hyperliquid-python-sdk`, optional extras |
 | Credentials | API key + private key + account id | master `account_address` + `api_wallet_key` |
 | Minimum order | ~500 USDT | $10 |
 | Price rule | fixed tick | 5 significant figures **and** `6 - szDecimals` decimals |
 | Candles | none | `candles_snapshot`, used to warm up |
-| Client order id | not used | 128-bit cloid, deterministic |
+| Client order id | not used | deterministic, folded per venue (uint32 / 128-bit hex) |
 | Leverage | web interface only | settable through the API, but the bot does not |
 
 The two Hyperliquid identities are easy to confuse and the config refuses to
@@ -54,21 +56,21 @@ with no error. `api_wallet_key` only signs.
 
 ## Renames
 
-| grvt_demo_bot | hyperbot |
+| grvt_demo_bot | tradebot |
 |---|---|
-| package `grvt_bot` | package `hyperbot` |
-| command `grvt-bot` | command `hyperbot` |
-| `grvt_bot.core.executor.GRVTExecutor` | `hyperbot.brokers.hyperliquid.HyperliquidBroker` |
+| package `grvt_bot` | package `tradebot` |
+| command `grvt-bot` | command `tradebot` |
+| `grvt_bot.core.executor.GRVTExecutor` | `tradebot.brokers.hyperliquid.HyperliquidBroker` |
 | `ConfigManager(config_path=...)` | `load_config(path)` -> frozen `BotConfig` |
 | `config.SYMBOL`, `config.LEVERAGE` | `config.trading.symbol`, `config.risk.max_leverage` |
 | `config.GRVT_API_KEY` (str) | `config.hyperliquid.api_wallet_key` (`Secret`, call `.reveal()`) |
-| `BaseStrategy` | `Strategy` (in `hyperbot.strategies.base`) |
+| `BaseStrategy` | `Strategy` (in `tradebot.strategies.base`) |
 | `get_signal() -> dict` | `get_signal(market: MarketView) -> Signal \| None` |
 | - | `risk_gate()`, which did not exist |
 | `config.yaml: grvt:` | `config.yaml: hyperliquid:` |
 
 `legacy/`, `scripts/check_leverage.py`, `setup.py` and six overlapping
-markdown files are gone. `hyperbot --doctor` replaces the leverage script.
+markdown files are gone. `tradebot --doctor` replaces the leverage script.
 
 ## Code changes
 
@@ -81,7 +83,7 @@ config = ConfigManager(config_path="config/config.yaml")
 symbol = config.SYMBOL
 
 # now
-from hyperbot.core.config import load_config
+from tradebot.core.config import load_config
 config = load_config("config/config.yaml")
 symbol = config.trading.symbol
 key = config.hyperliquid.api_wallet_key.reveal()   # explicit, only where used
@@ -150,9 +152,9 @@ python main.py
 # now
 pip install -e ".[dev]"             # tests and paper trading: no SDK needed
 pip install -e ".[hyperliquid]"     # adds the SDK, for live orders
-hyperbot --dry-run                  # offline simulator, no credentials
-hyperbot --doctor                   # check config and connection
-hyperbot --live                     # required for real orders
+tradebot --dry-run                  # offline simulator, no credentials
+tradebot --doctor                   # check config and connection
+tradebot --live                     # required for real orders
 ```
 
 ## Tests

@@ -9,8 +9,8 @@ from decimal import Decimal
 
 import pytest
 
-from hyperbot.brokers.base import BrokerError
-from hyperbot.brokers.hyperliquid import (
+from tradebot.brokers.base import BrokerError
+from tradebot.brokers.hyperliquid import (
     DEFAULT_MIN_NOTIONAL,
     HyperliquidBroker,
     instrument_from_universe,
@@ -22,10 +22,10 @@ from hyperbot.brokers.hyperliquid import (
     read_positions,
     read_universe,
 )
-from hyperbot.core.config import load_config
-from hyperbot.money import D
-from hyperbot.risk import risk_gate
-from hyperbot.types import PortfolioState, Side, Signal
+from tradebot.core.config import load_config
+from tradebot.money import D
+from tradebot.risk import risk_gate
+from tradebot.types import PortfolioState, Side, Signal
 
 ADDRESS = "0x1234567890abcdef1234567890abcdef12345678"
 
@@ -165,6 +165,7 @@ class StubExchange:
 
 def broker(info=None, exchange=None, **config_patch) -> HyperliquidBroker:
     data = {
+        "exchange": "hyperliquid",
         "hyperliquid": {"account_address": ADDRESS, "api_wallet_key": "0xkey"},
         "trading": {"symbol": "BTC"},
     }
@@ -324,7 +325,9 @@ def test_the_broker_filters_positions_by_symbol():
 
 
 def test_connecting_without_the_master_address_is_refused():
-    config = load_config(data={"hyperliquid": {"api_wallet_key": "0xkey"}}, env={})
+    config = load_config(
+        data={"exchange": "hyperliquid", "hyperliquid": {"api_wallet_key": "0xkey"}}, env={}
+    )
     b = HyperliquidBroker(config.hyperliquid, info=StubInfo(), exchange=StubExchange())
     with pytest.raises(BrokerError, match="account_address"):
         b.connect()
@@ -379,11 +382,11 @@ def test_asking_for_no_candles_does_nothing():
 
 
 def approved_order(symbol="BTC"):
-    config = load_config(data={"trading": {"symbol": symbol}}, env={})
+    config = load_config(data={"exchange": "hyperliquid", "trading": {"symbol": symbol}}, env={})
     spec = instrument_from_universe(symbol, {"sz_decimals": 5, "max_leverage": 40})
     signal = Signal.build(symbol, "buy", "100000", "99000", reason="unit test")
     state = PortfolioState(equity=D("10000"), peak_equity=D("10000"))
-    from hyperbot.core.engine import utc_now
+    from tradebot.core.engine import utc_now
 
     decision = risk_gate(signal, state, config.risk, spec, D("100000"), utc_now())
     assert not hasattr(decision, "code"), decision
@@ -461,7 +464,9 @@ def test_statuses_can_sit_at_the_top_level():
 
 def test_a_read_only_session_cannot_trade():
     """No API wallet key: the market and the account are readable, nothing else."""
-    config = load_config(data={"hyperliquid": {"account_address": ADDRESS}}, env={})
+    config = load_config(
+        data={"exchange": "hyperliquid", "hyperliquid": {"account_address": ADDRESS}}, env={}
+    )
     b = HyperliquidBroker(config.hyperliquid, info=StubInfo())
     b.connect()
     assert b.fetch_mark_price("BTC") == D("100000.0")
@@ -514,7 +519,9 @@ def test_leverage_can_be_set_and_is_capped_by_the_market():
 
 
 def test_an_unconnected_broker_refuses_to_work():
-    config = load_config(data={"hyperliquid": {"account_address": ADDRESS}}, env={})
+    config = load_config(
+        data={"exchange": "hyperliquid", "hyperliquid": {"account_address": ADDRESS}}, env={}
+    )
     b = HyperliquidBroker(config.hyperliquid)
     with pytest.raises(BrokerError, match="not connected"):
         b.fetch_equity()

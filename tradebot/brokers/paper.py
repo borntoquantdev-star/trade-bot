@@ -1,7 +1,7 @@
 """An offline broker.
 
 ``PaperBroker`` needs no API key, no network and no SDK.  It is what makes
-``hyperbot --dry-run`` genuinely dry: the old bot still authenticated against
+``tradebot --dry-run`` genuinely dry: the old bot still authenticated against
 the live exchange before deciding not to trade, so you could not test a
 strategy without real credentials.
 

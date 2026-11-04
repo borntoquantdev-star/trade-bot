@@ -1,7 +1,16 @@
-# hyperbot
+# tradebot
 
-A trading bot for [Hyperliquid](https://hyperliquid.xyz) perpetuals, built so
-that the part which can lose money is the part that is easiest to test.
+A trading bot for **GRVT** and **Hyperliquid** perpetuals, built so that the
+part which can lose money is the part that is easiest to test.
+
+One line in the config picks the venue:
+
+```yaml
+exchange: grvt        # or: hyperliquid
+```
+
+Everything above the broker - the risk gate, the engine, the strategies, the
+dashboard, the tests - is the same code either way.
 
 Every order passes through one pure function, `risk_gate()`, which sizes it
 from a risk budget and a stop distance and refuses it for one of thirteen
@@ -24,7 +33,7 @@ backtest.
 |---|---|
 | Python | 3.10 or newer (`python --version`) |
 | Git | to clone |
-| A Hyperliquid account | **not needed** to install, test or paper trade |
+| An exchange account | **not needed** to install, test or paper trade |
 
 Nothing else. The core package depends on PyYAML alone.
 
@@ -33,15 +42,15 @@ Nothing else. The core package depends on PyYAML alone.
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/borntoquantdev-star/hyperliquid-bot.git
-cd hyperliquid-bot
+git clone https://github.com/borntoquantdev-star/trade-bot.git
+cd trade-bot
 
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install --upgrade pip
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-To type `hyperbot` and `pytest` without the long prefix, activate the
+To type `tradebot` and `pytest` without the long prefix, activate the
 environment:
 
 ```powershell
@@ -56,14 +65,14 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .venv\Scripts\Activate.ps1
 ```
 
-or skip activation entirely and keep calling `.venv\Scripts\hyperbot.exe` and
+or skip activation entirely and keep calling `.venv\Scripts\tradebot.exe` and
 `.venv\Scripts\python.exe -m pytest`. Both work the same.
 
 ### macOS and Linux
 
 ```bash
-git clone https://github.com/borntoquantdev-star/hyperliquid-bot.git
-cd hyperliquid-bot
+git clone https://github.com/borntoquantdev-star/trade-bot.git
+cd trade-bot
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -81,8 +90,8 @@ Then change one line in `.vscode/settings.json`:
 
 ```bash
 pytest                      # expect: 236 passed, 8 skipped
-hyperbot --list-strategies  # expect: ma_cross and random
-hyperbot --dry-run --doctor # expect: "--- all good ---"
+tradebot --list-strategies  # expect: ma_cross and random
+tradebot --dry-run --doctor # expect: "--- all good ---"
 ```
 
 All three run offline. No credentials, no network, no exchange SDK. If
@@ -96,19 +105,20 @@ they need `--run-integration` and credentials.
 Only when you actually want to send orders:
 
 ```bash
+pip install -e ".[grvt]"            # adds grvt-pysdk
 pip install -e ".[hyperliquid]"     # adds hyperliquid-python-sdk
 ```
 
-The SDK is deliberately not part of the default install. The bot imports it
-only when a real broker connects, which is why tests and paper trading work
-without it.
+Each SDK is deliberately kept out of the default install. The bot imports one
+only when that broker connects, which is why tests and paper trading work with
+neither installed.
 
 ---
 
 ## First run
 
 ```bash
-hyperbot --dry-run --iterations 5
+tradebot --dry-run --iterations 5
 ```
 
 That trades against an offline simulator. Watch what it decided:
@@ -131,7 +141,7 @@ which makes a dry run worth watching.
 ## Watch it work
 
 ```bash
-hyperbot --dry-run --paper-walk --iterations 60   # window 1
+tradebot --dry-run --paper-walk --iterations 60   # window 1
 node dashboard/server.js --open                   # window 2
 ```
 
@@ -156,7 +166,7 @@ trading:
   symbol: "BTC"              # Hyperliquid names perps by coin, not by pair
   timeframe: "5m"            # candles loaded to warm a strategy up
   loop_interval: 60          # lower this to 5 while you are experimenting
-  strategy: "random"         # hyperbot --list-strategies
+  strategy: "random"         # tradebot --list-strategies
   warmup_candles: 200
 
 risk:
@@ -200,8 +210,8 @@ A `${VARIABLE}` that is not set in the shell is an error, on purpose.
 ```bash
 pip install -e ".[hyperliquid]"
 # fill in config/config.yaml, then
-hyperbot --doctor            # config, connection, price, instrument, candles
-hyperbot --live
+tradebot --doctor            # config, connection, price, instrument, candles
+tradebot --live
 ```
 
 `network: mainnet` additionally requires `--live` on the command line. Without
@@ -211,18 +221,18 @@ it the bot refuses to start and sends nothing.
 
 | | |
 |---|---|
-| `hyperbot --dry-run` | Paper trade offline. No credentials needed. |
-| `hyperbot --live` | Send real orders. Required when `network: mainnet`. |
-| `hyperbot --doctor` | Check config, connection, price, instrument, account, candles. |
-| `hyperbot --list-strategies` | What is registered. |
-| `hyperbot --resume` | Clear a halt the risk gate wrote. |
-| `hyperbot --close --yes` | Flatten the configured symbol. |
-| `hyperbot --iterations N` | Stop after N loops. |
-| `hyperbot --log-level DEBUG` | When something is not behaving. |
-| `hyperbot --dry-run --paper-walk` | Paper trade with a price that actually moves. |
+| `tradebot --dry-run` | Paper trade offline. No credentials needed. |
+| `tradebot --live` | Send real orders. Required when `network: mainnet`. |
+| `tradebot --doctor` | Check config, connection, price, instrument, account, candles. |
+| `tradebot --list-strategies` | What is registered. |
+| `tradebot --resume` | Clear a halt the risk gate wrote. |
+| `tradebot --close --yes` | Flatten the configured symbol. |
+| `tradebot --iterations N` | Stop after N loops. |
+| `tradebot --log-level DEBUG` | When something is not behaving. |
+| `tradebot --dry-run --paper-walk` | Paper trade with a price that actually moves. |
 | `node dashboard/server.js --open` | The live dashboard (read-only). |
 
-`hyperbot --help` lists everything.
+`tradebot --help` lists everything.
 
 ---
 
@@ -285,7 +295,7 @@ only `--resume` clears it.
 ```
 logs/audit.jsonl    one JSON line per decision: signal, reject or order
 logs/state.json     day's starting equity, peak equity, halt flag, sent order ids
-logs/hyperbot.log   rotating human-readable log
+logs/tradebot.log   rotating human-readable log
 ```
 
 `logs/` is gitignored. Order ids are recorded the moment an order is accepted
@@ -295,11 +305,11 @@ and never sent twice.
 
 Three steps, covered properly in [docs/strategies.md](docs/strategies.md):
 
-1. Subclass `Strategy` in `hyperbot/strategies/`, implement `get_signal`, and
+1. Subclass `Strategy` in `tradebot/strategies/`, implement `get_signal`, and
    return a `Signal` with a stop price.
-2. Register it in `hyperbot/strategies/__init__.py`.
+2. Register it in `tradebot/strategies/__init__.py`.
 3. Write tests against synthetic prices, then
-   `hyperbot --dry-run --strategy <name>`.
+   `tradebot --dry-run --strategy <name>`.
 
 Or let an AI assistant walk you through it: `/strategy-builder` in Claude Code
 or Copilot Chat, or ask Codex to read `ai/workflows/strategy-builder.md`. See
@@ -323,8 +333,8 @@ Read these before trusting it with anything:
 | Symptom | Cause and fix |
 |---|---|
 | `python: command not found` | Try `py -3` on Windows, `python3` elsewhere. Python 3.10+ is required. |
-| *"running scripts is disabled"* on activate | PowerShell execution policy. See the install section, or call `.venv\Scripts\hyperbot.exe` directly. |
-| `hyperbot: command not found` | The environment is not activated. Use `.venv\Scripts\hyperbot.exe`, or `python -m hyperbot.cli.main`. |
+| *"running scripts is disabled"* on activate | PowerShell execution policy. See the install section, or call `.venv\Scripts\tradebot.exe` directly. |
+| `tradebot: command not found` | The environment is not activated. Use `.venv\Scripts\tradebot.exe`, or `python -m tradebot.cli.main`. |
 | `the Hyperliquid SDK is not installed` | Live trading needs `pip install -e ".[hyperliquid]"`. Paper trading does not. |
 | `user state carried no accountValue` | You are querying with the API wallet address. `account_address` must be the master account. |
 | `BTC_USDT_Perp is not a Hyperliquid perp` | Symbols are coin names: `BTC`, `ETH`, `SOL`. |
@@ -337,9 +347,9 @@ Read these before trusting it with anything:
 ```bash
 pytest                                      # offline, the default
 pytest --run-integration                    # places real orders on the testnet
-ruff check hyperbot tests tools
-black hyperbot tests tools
-mypy hyperbot
+ruff check tradebot tests tools
+black tradebot tests tools
+mypy tradebot
 python tools/build_agent_files.py           # after editing anything in ai/
 cd dashboard && npm test                    # 32 dashboard tests, also offline
 ```

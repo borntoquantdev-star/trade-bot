@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hyperbot"
+name = "tradebot"
 version = "2.0.0"
-description = "Trading bot for Hyperliquid perpetuals with a pure, testable risk gate"
+description = "Trading bot for GRVT and Hyperliquid perpetuals with a pure, testable risk gate"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "borntoquantdev" }]
-keywords = ["trading", "hyperliquid", "perpetual-futures", "risk-management"]
+keywords = ["trading", "grvt", "hyperliquid", "perpetual-futures", "risk-management"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Financial and Insurance Industry",
@@ -23,12 +23,15 @@ classifiers = [
 ]
 
 # The core package runs, and its whole test suite passes, with nothing but
-# PyYAML installed.  Everything that talks to the exchange lives in the
-# "hyperliquid" extra, so paper trading and unit tests never need the SDK or
-# any credentials.
+# PyYAML installed.  Each exchange SDK lives in its own extra ("grvt" or
+# "hyperliquid"), so paper trading and unit tests never need either SDK or any
+# credentials.
 dependencies = ["pyyaml>=6.0"]
 
 [project.optional-dependencies]
+grvt = [
+  "grvt-pysdk>=0.1.0",
+]
 hyperliquid = [
   "hyperliquid-python-sdk>=0.9.0",
   "eth-account>=0.10.0",
@@ -43,17 +46,17 @@ dev = [
 ]
 
 [project.scripts]
-hyperbot = "hyperbot.cli.main:main"
+tradebot = "tradebot.cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/borntoquantdev-star/hyperliquid-bot"
-Repository = "https://github.com/borntoquantdev-star/hyperliquid-bot"
+Homepage = "https://github.com/borntoquantdev-star/trade-bot"
+Repository = "https://github.com/borntoquantdev-star/trade-bot"
 
 [tool.setuptools.packages.find]
-include = ["hyperbot*"]
+include = ["tradebot*"]
 
 [tool.setuptools.package-data]
-hyperbot = ["py.typed"]
+tradebot = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

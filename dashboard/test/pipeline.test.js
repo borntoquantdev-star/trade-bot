@@ -109,9 +109,10 @@ test("reject code ทุกตัวของบอทมีคำแปล", ()
   const codes = [
     "halted", "max_drawdown", "daily_loss_limit", "expired", "short_not_allowed",
     "invalid_stop", "slippage_exceeded", "already_in_position", "too_many_positions",
-    "qty_rounds_to_zero", "below_min_notional", "exceeds_exposure", "bad_instrument",
+    "qty_rounds_to_zero", "below_min_size", "below_min_notional", "exceeds_exposure",
+    "bad_instrument",
   ];
-  assert.equal(codes.length, 13);
+  assert.equal(codes.length, 14);
   for (const code of codes) {
     assert.ok(P.REJECT_TH[code], `ขาดคำแปลของ ${code}`);
   }

@@ -1,6 +1,14 @@
-# คู่มือ hyperbot (ภาษาไทย)
+# คู่มือ tradebot (ภาษาไทย)
 
-บอทเทรด perpetual futures บน [Hyperliquid](https://hyperliquid.xyz) ที่ออกแบบให้ **ส่วนที่ทำเงินหายได้ คือส่วนที่เทสง่ายที่สุด**
+บอทเทรด perpetual futures บน **GRVT** และ **Hyperliquid** ที่ออกแบบให้ **ส่วนที่ทำเงินหายได้ คือส่วนที่เทสง่ายที่สุด**
+
+เลือกตลาดด้วยบรรทัดเดียวใน config
+
+```yaml
+exchange: grvt        # หรือ hyperliquid
+```
+
+ทุกอย่างเหนือชั้น broker — risk gate, engine, กลยุทธ์, dashboard, เทสทั้งหมด — เป็นโค้ดชุดเดียวกันไม่ว่าจะเลือกตลาดไหน
 
 ทุกออเดอร์ต้องผ่านฟังก์ชันเดียวชื่อ `risk_gate()` ซึ่งคำนวณขนาดไม้จากงบความเสี่ยงกับระยะ stop และปฏิเสธออเดอร์ได้ด้วยเหตุผล 13 แบบที่มีชื่อชัดเจน ฟังก์ชันนี้ไม่ต่อเน็ต ไม่อ่านไฟล์ ไม่มีนาฬิกาของตัวเอง — จึงใช้โค้ดชุดเดียวกันได้ทั้ง live, paper และ backtest (ถ้ามีในอนาคต)
 
@@ -12,7 +20,7 @@
 |---|---|
 | Python | 3.10 ขึ้นไป (เช็คด้วย `python --version`) |
 | Git | ใช้ clone |
-| บัญชี Hyperliquid | **ไม่ต้องมี** สำหรับติดตั้ง รันเทส และเทรดกระดาษ |
+| บัญชีเทรด | **ไม่ต้องมี** สำหรับติดตั้ง รันเทส และเทรดกระดาษ |
 
 แค่นี้จริงๆ ตัว core พึ่งพาแค่ PyYAML ตัวเดียว
 
@@ -21,15 +29,15 @@
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/borntoquantdev-star/hyperliquid-bot.git
-cd hyperliquid-bot
+git clone https://github.com/borntoquantdev-star/trade-bot.git
+cd trade-bot
 
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install --upgrade pip
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-ถ้าอยากพิมพ์ `hyperbot` สั้นๆ ไม่ต้องใส่ path ยาว ให้ activate ก่อน
+ถ้าอยากพิมพ์ `tradebot` สั้นๆ ไม่ต้องใส่ path ยาว ให้ activate ก่อน
 
 ```powershell
 .venv\Scripts\Activate.ps1
@@ -42,13 +50,13 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .venv\Scripts\Activate.ps1
 ```
 
-หรือจะไม่ activate เลยก็ได้ เรียก `.venv\Scripts\hyperbot.exe` กับ `.venv\Scripts\python.exe -m pytest` ตรงๆ ผลเหมือนกันเป๊ะ
+หรือจะไม่ activate เลยก็ได้ เรียก `.venv\Scripts\tradebot.exe` กับ `.venv\Scripts\python.exe -m pytest` ตรงๆ ผลเหมือนกันเป๊ะ
 
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/borntoquantdev-star/hyperliquid-bot.git
-cd hyperliquid-bot
+git clone https://github.com/borntoquantdev-star/trade-bot.git
+cd trade-bot
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -66,8 +74,8 @@ python -m pip install -e ".[dev]"
 
 ```bash
 pytest                       # ต้องได้ 236 passed, 8 skipped
-hyperbot --list-strategies   # ต้องเห็น ma_cross กับ random
-hyperbot --dry-run --doctor  # ต้องจบด้วย "--- all good ---"
+tradebot --list-strategies   # ต้องเห็น ma_cross กับ random
+tradebot --dry-run --doctor  # ต้องจบด้วย "--- all good ---"
 ```
 
 ทั้งสามคำสั่งทำงาน **offline** ไม่ต้องมี credential ไม่ต้องต่อเน็ต ไม่ต้องลง SDK ถ้า `pytest` ผ่านก็ถือว่าติดตั้งครบแล้ว
@@ -77,6 +85,7 @@ hyperbot --dry-run --doctor  # ต้องจบด้วย "--- all good ---"
 ### ลงเพิ่มเมื่อจะเทรดจริง
 
 ```bash
+pip install -e ".[grvt]"            # ลง grvt-pysdk
 pip install -e ".[hyperliquid]"     # ลง hyperliquid-python-sdk
 ```
 
@@ -87,7 +96,7 @@ SDK ไม่ได้อยู่ใน default install โดยเจตน�
 ## รันครั้งแรก
 
 ```bash
-hyperbot --dry-run --iterations 5
+tradebot --dry-run --iterations 5
 ```
 
 นี่คือเทรดกับตัวจำลองในเครื่อง ดูว่ามันตัดสินใจอะไรไปบ้าง
@@ -105,7 +114,7 @@ Get-Content logs\audit.jsonl      # macOS/Linux: cat logs/audit.jsonl
 ## ดูบอททำงานแบบ realtime
 
 ```bash
-hyperbot --dry-run --paper-walk --iterations 60   # หน้าต่างที่ 1: บอท
+tradebot --dry-run --paper-walk --iterations 60   # หน้าต่างที่ 1: บอท
 node dashboard/server.js --open                   # หน้าต่างที่ 2: dashboard
 ```
 
@@ -129,7 +138,7 @@ trading:
   symbol: "BTC"              # Hyperliquid เรียกชื่อสินค้าเป็นชื่อเหรียญ ไม่ใช่คู่เทรด
   timeframe: "5m"            # แท่งเทียนที่ใช้ warm-up ตอนเริ่ม
   loop_interval: 60          # ตอนทดลองลดเป็น 5 จะดูสนุกกว่า
-  strategy: "random"         # ดูตัวเลือกด้วย hyperbot --list-strategies
+  strategy: "random"         # ดูตัวเลือกด้วย tradebot --list-strategies
   warmup_candles: 200
 
 risk:
@@ -172,8 +181,8 @@ hyperliquid:
 ```bash
 pip install -e ".[hyperliquid]"
 # ใส่ค่าใน config/config.yaml แล้ว
-hyperbot --doctor            # ตรวจ config, การเชื่อมต่อ, ราคา, สเปค, ยอดเงิน, แท่งเทียน
-hyperbot --live
+tradebot --doctor            # ตรวจ config, การเชื่อมต่อ, ราคา, สเปค, ยอดเงิน, แท่งเทียน
+tradebot --live
 ```
 
 ถ้า `network: mainnet` จะ **บังคับ** ให้ใส่ `--live` ด้วย ไม่ใส่คือบอทไม่ยอมเริ่มและไม่ส่งอะไรเลย
@@ -182,15 +191,15 @@ hyperbot --live
 
 | คำสั่ง | ทำอะไร |
 |---|---|
-| `hyperbot --dry-run` | เทรดกระดาษแบบ offline ไม่ต้องมี credential |
-| `hyperbot --live` | ยิงออเดอร์จริง (ถ้า `network: mainnet` บังคับต้องมีแฟล็กนี้) |
-| `hyperbot --doctor` | ตรวจ config, การเชื่อมต่อ, ราคา, สเปคสินค้า, ยอดเงิน, แท่งเทียน |
-| `hyperbot --list-strategies` | ดูกลยุทธ์ที่ลงทะเบียนไว้ |
-| `hyperbot --resume` | ปลดล็อกสถานะ halt ที่ risk gate เขียนไว้ |
-| `hyperbot --close --yes` | ปิด position ของ symbol ที่ตั้งไว้ |
-| `hyperbot --iterations N` | หยุดหลังวน N รอบ |
-| `hyperbot --log-level DEBUG` | เวลาอยากดูละเอียด |
-| `hyperbot --dry-run --paper-walk` | เทรดกระดาษแบบราคาขยับจริง |
+| `tradebot --dry-run` | เทรดกระดาษแบบ offline ไม่ต้องมี credential |
+| `tradebot --live` | ยิงออเดอร์จริง (ถ้า `network: mainnet` บังคับต้องมีแฟล็กนี้) |
+| `tradebot --doctor` | ตรวจ config, การเชื่อมต่อ, ราคา, สเปคสินค้า, ยอดเงิน, แท่งเทียน |
+| `tradebot --list-strategies` | ดูกลยุทธ์ที่ลงทะเบียนไว้ |
+| `tradebot --resume` | ปลดล็อกสถานะ halt ที่ risk gate เขียนไว้ |
+| `tradebot --close --yes` | ปิด position ของ symbol ที่ตั้งไว้ |
+| `tradebot --iterations N` | หยุดหลังวน N รอบ |
+| `tradebot --log-level DEBUG` | เวลาอยากดูละเอียด |
+| `tradebot --dry-run --paper-walk` | เทรดกระดาษแบบราคาขยับจริง |
 | `node dashboard/server.js --open` | เปิด dashboard ดูการทำงาน (อ่านอย่างเดียว) |
 
 ---
@@ -269,7 +278,7 @@ grep -o '"code": "[a-z_]*"' logs/audit.jsonl | sort | uniq -c | sort -rn
 ```
 logs/audit.jsonl    1 บรรทัด = 1 การตัดสินใจ (signal / reject / order)
 logs/state.json     ทุนต้นวัน, จุดสูงสุด, สถานะ halt, order id ที่ส่งแล้ว
-logs/hyperbot.log   log อ่านด้วยตาคน หมุนไฟล์อัตโนมัติ
+logs/tradebot.log   log อ่านด้วยตาคน หมุนไฟล์อัตโนมัติ
 ```
 
 `logs/` อยู่ใน .gitignore · order id บันทึกลงดิสก์ทันทีที่ออเดอร์ถูกรับ และไม่ส่งซ้ำ
@@ -278,9 +287,9 @@ logs/hyperbot.log   log อ่านด้วยตาคน หมุนไฟ�
 
 3 ขั้น (รายละเอียดเต็มใน [docs/strategies.md](strategies.md))
 
-1. สร้างคลาสสืบทอด `Strategy` ใน `hyperbot/strategies/` เขียน `get_signal` แล้วคืน `Signal` ที่มี stop
-2. ลงทะเบียนใน `hyperbot/strategies/__init__.py`
-3. เขียนเทสด้วยราคาสมมติ แล้วลอง `hyperbot --dry-run --strategy <ชื่อ>`
+1. สร้างคลาสสืบทอด `Strategy` ใน `tradebot/strategies/` เขียน `get_signal` แล้วคืน `Signal` ที่มี stop
+2. ลงทะเบียนใน `tradebot/strategies/__init__.py`
+3. เขียนเทสด้วยราคาสมมติ แล้วลอง `tradebot --dry-run --strategy <ชื่อ>`
 
 หรือให้ AI พาทำ: พิมพ์ `/strategy-builder` ใน Claude Code หรือ Copilot Chat · ถ้าใช้ Codex บอกว่า "อ่าน `ai/workflows/strategy-builder.md` แล้วพาผมสร้างกลยุทธ์" · ดู [docs/vscode.md](vscode.md)
 
@@ -297,8 +306,8 @@ logs/hyperbot.log   log อ่านด้วยตาคน หมุนไฟ�
 | อาการ | สาเหตุและทางแก้ |
 |---|---|
 | `python: command not found` | ลอง `py -3` บน Windows หรือ `python3` บน mac/Linux · ต้อง 3.10 ขึ้นไป |
-| *"running scripts is disabled"* ตอน activate | นโยบายของ PowerShell ดูหัวข้อติดตั้ง หรือเรียก `.venv\Scripts\hyperbot.exe` ตรงๆ |
-| `hyperbot: command not found` | ยังไม่ activate · ใช้ `.venv\Scripts\hyperbot.exe` หรือ `python -m hyperbot.cli.main` |
+| *"running scripts is disabled"* ตอน activate | นโยบายของ PowerShell ดูหัวข้อติดตั้ง หรือเรียก `.venv\Scripts\tradebot.exe` ตรงๆ |
+| `tradebot: command not found` | ยังไม่ activate · ใช้ `.venv\Scripts\tradebot.exe` หรือ `python -m tradebot.cli.main` |
 | `the Hyperliquid SDK is not installed` | เทรดจริงต้อง `pip install -e ".[hyperliquid]"` · paper ไม่ต้อง |
 | `user state carried no accountValue` | คุณ query ด้วย address ของ API wallet · `account_address` ต้องเป็นบัญชีแม่ |
 | `BTC_USDT_Perp is not a Hyperliquid perp` | ชื่อสินค้าเป็นชื่อเหรียญ: `BTC` `ETH` `SOL` |

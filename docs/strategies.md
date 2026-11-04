@@ -55,7 +55,7 @@ class BreakoutStrategy(Strategy):
 Register it so the CLI can find it:
 
 ```python
-# hyperbot/strategies/__init__.py
+# tradebot/strategies/__init__.py
 STRATEGIES = {
     "random": RandomStrategy,
     "ma_cross": MaCrossStrategy,
@@ -134,7 +134,7 @@ though it looks like one.
 
 ```bash
 pytest tests/test_breakout_strategy.py -v
-hyperbot --dry-run --strategy breakout --iterations 50
+tradebot --dry-run --strategy breakout --iterations 50
 grep -o '"code": "[a-z_]*"' logs/audit.jsonl | sort | uniq -c | sort -rn
 ```
 

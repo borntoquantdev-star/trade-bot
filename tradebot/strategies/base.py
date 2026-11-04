@@ -62,7 +62,7 @@ class MarketView:
 class Strategy(ABC):
     """Base class for all strategies."""
 
-    #: Shown by ``hyperbot --list-strategies``.
+    #: Shown by ``tradebot --list-strategies``.
     description = ""
 
     def __init__(self, config: Any = None, logger: logging.Logger | None = None) -> None:
@@ -72,7 +72,7 @@ class Strategy(ABC):
 
     @abstractmethod
     def get_signal(self, market: MarketView) -> Signal | None:
-        """Return a :class:`~hyperbot.types.Signal`, or ``None`` to do nothing.
+        """Return a :class:`~tradebot.types.Signal`, or ``None`` to do nothing.
 
         Must be free of I/O and of surprises: called once per loop iteration.
         """

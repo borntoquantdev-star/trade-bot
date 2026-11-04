@@ -8,7 +8,7 @@
 · มีมินิแมปกับแถบซูมมุมขวาล่าง และกรอบ group ล้อมสายโซ่หลักไว้
 
 ```bash
-hyperbot --dry-run --paper-walk --iterations 60     # หน้าต่างที่ 1: บอท
+tradebot --dry-run --paper-walk --iterations 60     # หน้าต่างที่ 1: บอท
 node dashboard/server.js --open                     # หน้าต่างที่ 2: dashboard
 ```
 
@@ -17,7 +17,7 @@ node dashboard/server.js --open                     # หน้าต่าง�
 ## มันทำงานยังไง
 
 ```
-hyperbot  ──เขียน──>  logs/audit.jsonl   1 บรรทัด = 1 การตัดสินใจ
+tradebot  ──เขียน──>  logs/audit.jsonl   1 บรรทัด = 1 การตัดสินใจ
                       logs/state.json    ทุนต้นวัน จุดสูงสุด สถานะ halt
                             │
                             │  server.js เฝ้าไฟล์ (poll 500ms) อ่านเฉพาะส่วนที่เพิ่ม

@@ -1,71 +1,65 @@
-# hyperbot configuration
+# tradebot configuration
 #
 #   cp config/config.example.yaml config/config.yaml
 #
 # config/config.yaml is gitignored. The example below works as-is for paper
-# trading: `hyperbot --dry-run` needs no credentials at all.
+# trading: `tradebot --dry-run` needs no credentials at all.
+
+# ซึ่งตลาด: grvt | hyperliquid
+# ค่า default ของ symbol และสเปคสินค้าจะเปลี่ยนตามตลาดที่เลือกให้เอง
+exchange: "grvt"
+
+grvt:
+  # "testnet" หรือ "prod" — prod ต้องใส่ --live ด้วยถึงจะยิงออเดอร์
+  env: "testnet"
+
+  # ออกกุญแจที่หน้า API ของ GRVT แล้วเปิดสิทธิ์เทรดอย่างเดียว ปิดสิทธิ์ถอนเงิน
+  # เว้นว่างไว้ได้ถ้าจะเทรดกระดาษ (--dry-run)
+  # ถ้าไม่อยากเก็บค่าไว้ในไฟล์ ให้เขียน ${GRVT_API_KEY} แล้ว export ใน shell แทน
+  api_key: ""
+  private_key: ""
+  trading_account_id: ""
+  sub_account_id: "0"
 
 hyperliquid:
-  # "testnet" or "mainnet". Running mainnet also requires the --live flag.
+  # "testnet" หรือ "mainnet" — mainnet ต้องใส่ --live
   network: "testnet"
 
-  # Hyperliquid has TWO identities and mixing them up is the classic mistake.
-  #
-  #   account_address  the MASTER account, a 42-character 0x address.
-  #                    Positions and equity are looked up by this address.
-  #                    Query with the API wallet address instead and the
-  #                    exchange returns an empty state, with no error.
-  #
-  #   api_wallet_key   the PRIVATE KEY of an API wallet (an "agent") that the
-  #                    master account has approved. It only signs orders.
-  #                    Create one at https://app.hyperliquid.xyz/API
-  #
-  # Leave both empty to paper trade. To keep the key out of the file, write
-  # a ${VARIABLE} reference and export it in your shell instead:
-  #     api_wallet_key: "${HYPERLIQUID_API_WALLET_KEY}"
-  # A ${VARIABLE} that is not set in the shell is an error, on purpose.
+  # สองค่านี้คนละหน้าที่ อย่าสลับกัน
+  #   account_address  บัญชีแม่ (0x + 40 ตัว) ใช้ query ยอดเงินและ position
+  #   api_wallet_key   private key ของ API wallet ใช้เซ็นอย่างเดียว ถอนเงินไม่ได้
+  # สร้าง API wallet ที่ https://app.hyperliquid.xyz/API
+  # ⚠️ faucet ของ testnet จ่าย mock USDC ให้เฉพาะ wallet ที่เคย deposit บน mainnet
   account_address: ""
   api_wallet_key: ""
-
-  # Optional: trade on behalf of a vault rather than the account itself.
   vault_address: ""
 
 trading:
-  # Hyperliquid perps are named by coin, not by pair: BTC, ETH, SOL, ...
-  symbol: "BTC"
+  # เว้นว่าง = ใช้ค่าเริ่มต้นของตลาดที่เลือก
+  #   grvt         BTC_USDT_Perp   (ชื่อเป็นคู่เทรด)
+  #   hyperliquid  BTC             (ชื่อเป็นเหรียญเปล่า)
+  symbol: ""
 
-  # Candle interval used to warm the strategy up at start-up.
-  # One of: 1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w 1M
+  # แท่งเทียนที่ใช้ warm-up ตอนเริ่ม
+  # 1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w
   timeframe: "5m"
 
-  loop_interval: 60          # seconds between iterations; lower while testing
-  strategy: "random"         # see: hyperbot --list-strategies
-  warmup_candles: 200        # real bars loaded before the first decision
+  loop_interval: 60          # วินาทีต่อรอบ ตอนทดลองลดเป็น 5
+  strategy: "random"         # ดูตัวเลือกด้วย tradebot --list-strategies
+  warmup_candles: 200        # แท่งจริงที่โหลดมาก่อนตัดสินใจรอบแรก
 
 risk:
-  # Percentages are written the way a human says them: 1.0 means 1%.
-  risk_per_trade_pct: 1.0    # of equity, lost if the stop is hit
-  max_positions: 1           # concurrent open positions
-  max_daily_loss_pct: 3.0    # equity drop since 00:00 UTC that halts the bot
-  max_drawdown_pct: 10.0     # drop from peak equity that halts the bot
-  max_leverage: 5            # exposure ceiling = equity x this
-  max_slippage_pct: 0.1      # also becomes the limit price on every order
-  fee_rate_pct: 0.045        # taker fee per leg, included when sizing
+  # เขียนเป็นเปอร์เซ็นต์แบบที่คนพูดกัน (1.0 คือ 1%)
+  risk_per_trade_pct: 1.0    # เสียเท่านี้ของพอร์ตถ้าโดน stop
+  max_positions: 1
+  max_daily_loss_pct: 3.0    # พอร์ตลดจากต้นวัน (UTC) เท่านี้ → หยุดบอท
+  max_drawdown_pct: 10.0     # พอร์ตลดจากจุดสูงสุดเท่านี้ → หยุดบอท
+  max_leverage: 5            # เพดาน exposure = ทุน × ค่านี้
+  max_slippage_pct: 0.1      # และกลายเป็น limit price ของทุกออเดอร์
+  fee_rate_pct: 0.05         # ค่าธรรมเนียมต่อขา ใช้ตอนคำนวณขนาดไม้
   allow_short: true
-  starting_equity_usdt: 10000  # paper trading only; live reads the account
+  starting_equity_usdt: 10000  # เทรดกระดาษเท่านั้น ของจริงอ่านจากบัญชี
 
-instrument:
-  # Fallbacks for paper trading. A live session reads the real values from the
-  # exchange's perp metadata, where szDecimals drives both precisions.
-  #
-  # BTC has szDecimals 5, so:
-  #   lot_step  = 10^-5
-  #   tick_size = 10^-(6 - 5) = 0.1   (perps allow 6 - szDecimals decimals)
-  #
-  # Prices additionally carry at most 5 significant figures, except that whole
-  # numbers are always accepted. Both rules are enforced together.
-  tick_size: 0.1
-  lot_step: 0.00001
-  min_notional_usdt: 10      # the exchange answers "minimum value of $10"
-  max_leverage: 40
-  price_sig_figs: 5
+# เว้นทั้งบล็อกไว้ = ใช้ค่าของตลาดที่เลือก แล้วค่อยให้ตลาดจริงบอกตอนต่อ
+# ใส่ทับได้ทีละช่อง เช่นใส่แค่ tick_size ช่องอื่นยังมาจากค่าเริ่มต้น
+instrument: {}

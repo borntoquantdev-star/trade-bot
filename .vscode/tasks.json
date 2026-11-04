@@ -31,7 +31,7 @@
     {
       "label": "test: with coverage",
       "type": "shell",
-      "command": "python -m pytest --cov=hyperbot --cov-report=term-missing",
+      "command": "python -m pytest --cov=tradebot --cov-report=term-missing",
       "problemMatcher": []
     },
     {
@@ -43,14 +43,14 @@
     {
       "label": "lint",
       "type": "shell",
-      "command": "python -m ruff check hyperbot tests tools",
+      "command": "python -m ruff check tradebot tests tools",
       "group": { "kind": "build", "isDefault": true },
       "problemMatcher": []
     },
     {
       "label": "format",
       "type": "shell",
-      "command": "python -m black hyperbot tests tools",
+      "command": "python -m black tradebot tests tools",
       "problemMatcher": []
     },
     {
@@ -69,13 +69,13 @@
     {
       "label": "bot: dry run",
       "type": "shell",
-      "command": "python -m hyperbot.cli.main --dry-run --iterations 20",
+      "command": "python -m tradebot.cli.main --dry-run --iterations 20",
       "problemMatcher": []
     },
     {
       "label": "bot: doctor",
       "type": "shell",
-      "command": "python -m hyperbot.cli.main --dry-run --doctor",
+      "command": "python -m tradebot.cli.main --dry-run --doctor",
       "problemMatcher": []
     },
     {

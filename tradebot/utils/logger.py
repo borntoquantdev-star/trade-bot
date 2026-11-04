@@ -17,8 +17,8 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def setup_logger(
-    name: str = "hyperbot",
-    log_file: str | Path | None = "logs/hyperbot.log",
+    name: str = "tradebot",
+    log_file: str | Path | None = "logs/tradebot.log",
     level: int = logging.INFO,
     *,
     console: bool = True,

@@ -1,14 +1,14 @@
 """The broker boundary.
 
 A broker is the **only** part of this package allowed to touch the network.
-Strategies and the risk gate deal in :mod:`hyperbot.types` values; brokers
+Strategies and the risk gate deal in :mod:`tradebot.types` values; brokers
 translate those to and from whatever an exchange happens to speak.
 
 Two implementations ship with the bot:
 
-* :class:`~hyperbot.brokers.paper.PaperBroker` - offline, deterministic, needs
+* :class:`~tradebot.brokers.paper.PaperBroker` - offline, deterministic, needs
   no credentials.  Powers ``--dry-run`` and the test suite.
-* :class:`~hyperbot.brokers.hyperliquid.HyperliquidBroker` - the real exchange.
+* :class:`~tradebot.brokers.hyperliquid.HyperliquidBroker` - the real exchange.
 """
 
 from __future__ import annotations

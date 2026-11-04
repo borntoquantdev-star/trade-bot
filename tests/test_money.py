@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from hyperbot.money import (
+from tradebot.money import (
     D,
     ceil_to_step,
     floor_to_step,

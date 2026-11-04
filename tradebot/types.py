@@ -67,6 +67,10 @@ class InstrumentSpec:
     min_notional: Decimal
     max_leverage: Decimal = D(20)
     price_sig_figs: int = 5
+    #: Smallest order the venue accepts, counted in the base asset.
+    #: GRVT publishes this as ``min_size``; Hyperliquid has no such rule and
+    #: leaves it at zero.
+    min_qty: Decimal = ZERO
 
     def __post_init__(self) -> None:
         for name in ("tick_size", "lot_step", "min_notional"):
@@ -76,6 +80,8 @@ class InstrumentSpec:
             raise ValueError(f"{self.symbol}: max_leverage must be positive")
         if self.price_sig_figs < 0:
             raise ValueError(f"{self.symbol}: price_sig_figs cannot be negative")
+        if self.min_qty < ZERO:
+            raise ValueError(f"{self.symbol}: min_qty cannot be negative")
 
     @classmethod
     def build(
@@ -86,6 +92,7 @@ class InstrumentSpec:
         min_notional: Number,
         max_leverage: Number = 20,
         price_sig_figs: int = 5,
+        min_qty: Number = 0,
     ) -> InstrumentSpec:
         return cls(
             symbol,
@@ -94,6 +101,7 @@ class InstrumentSpec:
             D(min_notional),
             D(max_leverage),
             int(price_sig_figs),
+            D(min_qty),
         )
 
     def price_step(self, around: Number) -> Decimal:
@@ -298,6 +306,7 @@ class RejectCode(str, Enum):
     ALREADY_IN_POSITION = "already_in_position"
     TOO_MANY_POSITIONS = "too_many_positions"
     QTY_ROUNDS_TO_ZERO = "qty_rounds_to_zero"
+    BELOW_MIN_SIZE = "below_min_size"
     BELOW_MIN_NOTIONAL = "below_min_notional"
     EXCEEDS_EXPOSURE = "exceeds_exposure"
     BAD_INSTRUMENT = "bad_instrument"

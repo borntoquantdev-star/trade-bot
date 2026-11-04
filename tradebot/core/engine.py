@@ -4,12 +4,12 @@ One iteration, in order:
 
 1. read the market and the account from the broker,
 2. ask the strategy for a signal,
-3. put the signal through :func:`~hyperbot.risk.risk_gate`,
+3. put the signal through :func:`~tradebot.risk.risk_gate`,
 4. send the order the gate approved - and nothing else.
 
 The engine owns no trading rules.  It cannot decide to skip a check, resize an
 order or trade a different symbol: whatever the gate hands back is what gets
-sent, and a :class:`~hyperbot.types.Reject` is simply logged.  That separation
+sent, and a :class:`~tradebot.types.Reject` is simply logged.  That separation
 is the whole point of the package.
 
 State that must outlive the process - the day's starting equity, the peak
@@ -130,7 +130,7 @@ class Engine:
         self.config = config
         self.broker = broker
         self.strategy = strategy
-        self.log = logger or logging.getLogger("hyperbot.engine")
+        self.log = logger or logging.getLogger("tradebot.engine")
         self.state_path = Path(state_path) if state_path else None
         self.audit_path = Path(audit_path) if audit_path else None
         self.clock = clock
@@ -157,7 +157,7 @@ class Engine:
         if self.state.halted:
             self.log.error(
                 "state file says trading is HALTED: %s. Clear it with "
-                "`hyperbot resume` once you know why.",
+                "`tradebot resume` once you know why.",
                 self.state.halt_reason,
             )
 
@@ -372,7 +372,7 @@ class Engine:
         self.state.save(self.state_path)
 
     def resume(self) -> None:
-        """Clear a halt (used by ``hyperbot resume``)."""
+        """Clear a halt (used by ``tradebot resume``)."""
         self.state.halted = False
         self.state.halt_reason = ""
         self.state.save(self.state_path)

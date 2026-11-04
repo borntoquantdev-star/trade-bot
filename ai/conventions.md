@@ -6,19 +6,21 @@ from it — edit this file, then run `python tools/build_agent_files.py`.
 
 ## What this project is
 
-A trading bot for Hyperliquid perpetual futures. It is used to
+A trading bot for GRVT and Hyperliquid perpetual futures, chosen with one config line. It is used to
 teach people how an automated strategy is built safely, so clarity and
 guardrails matter more than features.
 
 ```
-hyperbot/
+tradebot/
   money.py        Decimal helpers. Money never touches float.
   types.py        Immutable value types: Signal, SizedOrder, Reject, limits.
   risk.py         risk_gate() — the one place that approves an order.
   strategies/     Market data in, Signal or None out. No I/O.
   brokers/        The only code allowed to touch the network.
     paper.py      Offline simulator: powers --dry-run and the tests.
-    hyperliquid.py  The real exchange. Imports the SDK lazily.
+    grvt.py       GRVT. Imports its SDK lazily.
+    hyperliquid.py  Hyperliquid. Imports its SDK lazily.
+    __init__.py   build_live_broker(): picks one from config.exchange.
   core/
     config.py     YAML + environment variables, validated.
     engine.py     The loop. Owns no trading rules.
@@ -40,20 +42,23 @@ The dependency direction is one-way: `cli → core → {strategies, brokers} →
    through a suggested quantity, not by any other route.
 4. **Every `Signal` carries a stop price.** There is no code path that opens a
    position without one.
-5. **Money is `Decimal`.** The single permitted `float()` call is at the SDK
-   boundary in `brokers/hyperliquid.py`, where the exchange library demands
-   one.
-6. **The engine does not second-guess the gate.** Whatever the gate returns is
+5. **Money is `Decimal`.** The only permitted `float()` calls are at the SDK
+   boundaries inside `brokers/`, where the exchange libraries demand them.
+6. **Venue quirks live in the broker.** Symbol shape, price rounding rules,
+   client order id format, minimum size - a broker absorbs all of it.
+   `risk_gate` must never learn an exchange's name, and no `if exchange ==`
+   may appear outside `brokers/` and `core/config.py`.
+7. **The engine does not second-guess the gate.** Whatever the gate returns is
    sent unchanged, or refused and logged. No resizing, no retry with different
    numbers, no bypass flag.
-7. **Secrets are `Secret` objects.** Never log, print, format or write a
+8. **Secrets are `Secret` objects.** Never log, print, format or write a
    revealed credential. Call `.reveal()` only where the value is used.
-8. **The default test run is offline.** `pytest` must pass with no network, no
+9. **The default test run is offline.** `pytest` must pass with no network, no
    credentials and no exchange SDK installed. Anything that sends a real order
    is marked `@pytest.mark.integration` and needs `--run-integration`.
-9. **Live trading needs an explicit flag.** `hyperliquid.network: mainnet`
-   without `--live` must refuse to run.
-10. **The two Hyperliquid identities stay apart.** `account_address` is the
+10. **Live trading needs an explicit flag.** `grvt.env: prod` or
+    `hyperliquid.network: mainnet` without `--live` must refuse to run.
+11. **The two Hyperliquid identities stay apart.** `account_address` is the
     master account and is what every query uses; `api_wallet_key` only signs.
     Querying with the agent address returns an empty state with no error, so
     the config validates the address shape and refuses a key in that field.
@@ -64,9 +69,9 @@ The dependency direction is one-way: `cli → core → {strategies, brokers} →
   serious first — the enum's order defines `severity`), add the check to
   `risk_gate` in the same position, and add a test that triggers it.
 - A new strategy: subclass `Strategy`, implement `get_signal`, register it in
-  `hyperbot/strategies/__init__.py`, and write tests against synthetic prices.
+  `tradebot/strategies/__init__.py`, and write tests against synthetic prices.
   Never let a strategy call a broker.
-- A new exchange: implement the `Broker` protocol in `hyperbot/brokers/`, keep
+- A new exchange: implement the `Broker` protocol in `tradebot/brokers/`, keep
   reply parsing in pure module-level `read_*` functions, and test those with
   payload dictionaries rather than a live connection.
 - A new config key: add it to `DEFAULTS`, parse and validate it in `_build`,
@@ -90,8 +95,8 @@ The dependency direction is one-way: `cli → core → {strategies, brokers} →
 
 ```bash
 pytest                              # must pass offline
-ruff check hyperbot tests           # must be clean
-black --check hyperbot tests
+ruff check tradebot tests           # must be clean
+black --check tradebot tests
 python tools/build_agent_files.py --check   # generated files up to date
 ```
 

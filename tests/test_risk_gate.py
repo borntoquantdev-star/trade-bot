@@ -6,9 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from hyperbot.money import D
-from hyperbot.risk import client_order_id, explain, risk_gate
-from hyperbot.types import (
+from tradebot.money import D
+from tradebot.risk import client_order_id, explain, risk_gate
+from tradebot.types import (
     InstrumentSpec,
     PortfolioState,
     Position,

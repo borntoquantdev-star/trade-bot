@@ -22,11 +22,11 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Lint
-        run: python -m ruff check hyperbot tests tools
+        run: python -m ruff check tradebot tests tools
       - name: Format check
-        run: python -m black --check hyperbot tests tools
+        run: python -m black --check tradebot tests tools
       - name: Types
-        run: python -m mypy hyperbot
+        run: python -m mypy tradebot
       - name: Tests
         run: python -m pytest
       - name: Generated AI files are up to date

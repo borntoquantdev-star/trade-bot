@@ -5,7 +5,7 @@
       "name": "Bot: dry run (20 iterations)",
       "type": "debugpy",
       "request": "launch",
-      "module": "hyperbot.cli.main",
+      "module": "tradebot.cli.main",
       "args": ["--dry-run", "--iterations", "20", "--log-level", "DEBUG"],
       "console": "integratedTerminal",
       "justMyCode": false
@@ -14,7 +14,7 @@
       "name": "Bot: dry run (until stopped)",
       "type": "debugpy",
       "request": "launch",
-      "module": "hyperbot.cli.main",
+      "module": "tradebot.cli.main",
       "args": ["--dry-run"],
       "console": "integratedTerminal",
       "justMyCode": false
@@ -23,7 +23,7 @@
       "name": "Bot: doctor (checks config + connection)",
       "type": "debugpy",
       "request": "launch",
-      "module": "hyperbot.cli.main",
+      "module": "tradebot.cli.main",
       "args": ["--dry-run", "--doctor"],
       "console": "integratedTerminal"
     },
@@ -31,7 +31,7 @@
       "name": "Bot: TESTNET live orders",
       "type": "debugpy",
       "request": "launch",
-      "module": "hyperbot.cli.main",
+      "module": "tradebot.cli.main",
       "args": ["--live", "--config", "config/config.yaml"],
       "console": "integratedTerminal",
       "justMyCode": false

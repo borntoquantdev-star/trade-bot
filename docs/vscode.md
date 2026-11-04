@@ -7,8 +7,8 @@ expects, so Codex, Claude Code and Copilot all read the same rules.
 ## 1. Open the project
 
 ```bash
-git clone https://github.com/borntoquantdev-star/hyperliquid-bot.git
-cd hyperliquid-bot
+git clone https://github.com/borntoquantdev-star/trade-bot.git
+cd trade-bot
 code .
 ```
 
@@ -45,7 +45,7 @@ all offline, so running them cannot touch an exchange. Tests that do place
 real orders are skipped unless you pass `--run-integration`.
 
 Then press `F5` and pick **Bot: dry run (20 iterations)**. Breakpoints in
-`hyperbot/risk.py` are a good way to watch an order being sized.
+`tradebot/risk.py` are a good way to watch an order being sized.
 
 ## 4. Useful tasks
 

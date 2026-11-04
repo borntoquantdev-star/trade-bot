@@ -23,8 +23,8 @@ and every signal it emits carries a stop price.
 Then check what already exists:
 
 ```bash
-hyperbot --list-strategies
-ls hyperbot/strategies/
+tradebot --list-strategies
+ls tradebot/strategies/
 ```
 
 If the user already has a strategy in this repo and wants to change it, skip
@@ -124,7 +124,7 @@ Do not continue on silence or a vague answer.
 
 ## Phase 3 — write the strategy
 
-Create `hyperbot/strategies/<name>.py`. Follow `ma_cross.py` as the model: a
+Create `tradebot/strategies/<name>.py`. Follow `ma_cross.py` as the model: a
 warm-up guard, the rule, an explicit stop, and a `reason` string that will
 make sense in a log a week later.
 
@@ -177,7 +177,7 @@ class ExampleStrategy(Strategy):
 Register it:
 
 ```python
-# hyperbot/strategies/__init__.py
+# tradebot/strategies/__init__.py
 STRATEGIES = {
     "random": RandomStrategy,
     "ma_cross": MaCrossStrategy,
@@ -210,13 +210,13 @@ Cover at least:
 
 ```bash
 pytest tests/test_<name>_strategy.py -v
-ruff check hyperbot tests
+ruff check tradebot tests
 ```
 
 Then watch it run offline, where nothing can be lost:
 
 ```bash
-hyperbot --dry-run --strategy <name> --iterations 20
+tradebot --dry-run --strategy <name> --iterations 20
 ```
 
 Read `logs/audit.jsonl`. Every line is one decision. Check that the refusals
@@ -229,8 +229,8 @@ make sense — a strategy whose signals are all refused for
 
 ```bash
 cp config/config.example.yaml config/config.yaml   # fill in testnet keys
-hyperbot --doctor
-hyperbot --live --strategy <name>                  # env: testnet
+tradebot --doctor
+tradebot --live --strategy <name>                  # env: testnet
 ```
 
 Let it run long enough to produce real refusals and at least a few fills.
@@ -252,7 +252,7 @@ evidence this repo can produce.
 
 Leave behind:
 
-- `hyperbot/strategies/<name>.py` with the strategy,
+- `tradebot/strategies/<name>.py` with the strategy,
 - `tests/test_<name>_strategy.py`, passing,
 - the entry in `STRATEGIES`,
 - `docs/strategies.md` updated with a short section describing the rule,

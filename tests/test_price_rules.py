@@ -13,8 +13,8 @@ from the documentation itself.
 
 import pytest
 
-from hyperbot.money import D, significant_figure_step
-from hyperbot.types import InstrumentSpec
+from tradebot.money import D, significant_figure_step
+from tradebot.types import InstrumentSpec
 
 # BTC: szDecimals 5 -> 1 price decimal, 1e-5 lots
 BTC = InstrumentSpec.build("BTC", tick_size="0.1", lot_step="0.00001", min_notional="10")

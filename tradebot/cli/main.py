@@ -1,11 +1,11 @@
 """Command line entry point.
 
-    hyperbot --dry-run                 paper trade, no credentials needed
-    hyperbot --doctor                  check the config and the connection
-    hyperbot --list-strategies         what is registered
-    hyperbot --live                    real orders (prod requires this flag)
-    hyperbot --resume                  clear a halt written by the risk gate
-    hyperbot --close --yes             flatten the configured symbol
+    tradebot --dry-run                 paper trade, no credentials needed
+    tradebot --doctor                  check the config and the connection
+    tradebot --list-strategies         what is registered
+    tradebot --live                    real orders (prod requires this flag)
+    tradebot --resume                  clear a halt written by the risk gate
+    tradebot --close --yes             flatten the configured symbol
 
 ``--dry-run`` is the default when ``hyperliquid.network`` is ``testnet`` and no ``--live``
 flag is given, so the accident path leads to the paper broker rather than to
@@ -34,18 +34,18 @@ DEFAULT_CONFIG = "config/config.yaml"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="hyperbot",
+        prog="tradebot",
         description="Trading bot for Hyperliquid perpetuals with a pure, testable risk gate.",
         epilog="Read docs/vscode.md for the editor setup and docs/architecture.md for the design.",
     )
-    parser.add_argument("--version", action="version", version=f"hyperbot {__version__}")
+    parser.add_argument("--version", action="version", version=f"tradebot {__version__}")
     parser.add_argument(
         "--config", default=DEFAULT_CONFIG, help=f"config file (default: {DEFAULT_CONFIG})"
     )
     parser.add_argument(
         "--strategy", default=None, help="override trading.strategy from the config"
     )
-    parser.add_argument("--log-file", default="logs/hyperbot.log", help="log file path")
+    parser.add_argument("--log-file", default="logs/tradebot.log", help="log file path")
     parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--live",
         action="store_true",
-        help="send real orders; required when hyperliquid.network is 'mainnet'",
+        help="send real orders; required on grvt prod or hyperliquid mainnet",
     )
     mode.add_argument("--paper-price", default="100000", help="starting price for the paper broker")
     mode.add_argument(
@@ -134,14 +134,10 @@ def _make_broker(
             equity=config.starting_equity,
             logger=log,
         )
-    from ..brokers.hyperliquid import HyperliquidBroker  # imported late: needs the SDK
+    from ..brokers import build_live_broker  # imported late: needs the exchange SDK
 
     config.require_live_credentials()
-    return HyperliquidBroker(
-        settings=config.hyperliquid,
-        logger=log,
-        min_notional=config.instrument.min_notional,
-    )
+    return build_live_broker(config, log)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -152,8 +148,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(describe_strategies())
         return 0
 
-    log = setup_logger("hyperbot", args.log_file, getattr(logging, args.log_level))
-    log.info("hyperbot %s", __version__)
+    log = setup_logger("tradebot", args.log_file, getattr(logging, args.log_level))
+    log.info("tradebot %s", __version__)
 
     config = _load(args, log)
     if config is None:
@@ -161,11 +157,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Decide paper vs live, and refuse to touch production by accident.
     paper = args.dry_run or not args.live
-    if config.hyperliquid.is_live and not args.live:
+    if config.is_live and not args.live:
         log.error(
-            "hyperliquid.network is 'mainnet' but --live was not passed. Nothing "
-            "was sent. Run with --dry-run to paper trade, or add --live if you "
-            "really mean real money on a real account."
+            "%s points at real money (%s) but --live was not passed. Nothing was "
+            "sent. Run with --dry-run to paper trade, or add --live if you really "
+            "mean real money on a real account.",
+            config.exchange,
+            config.venue_name,
         )
         return 2
     if args.dry_run and args.live:
@@ -175,7 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     log.info("configuration:\n%s", describe(config))
     log.info(
         "broker: %s",
-        "paper (offline)" if paper else f"Hyperliquid {config.hyperliquid.network}",
+        "paper (offline)" if paper else f"{config.exchange} {config.venue_name}",
     )
     if (Path(__file__).resolve().parents[2] / "dashboard" / "server.js").exists():
         log.info("dashboard: node dashboard/server.js --open  (reads logs/, never trades)")
@@ -225,10 +223,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not paper:
         log.warning(
-            "LIVE MODE on %s. The bot caps exposure at %sx equity; the account's "
-            "own leverage setting is separate (hyperbot does not change it unless "
-            "you call set_leverage yourself).",
-            config.hyperliquid.network,
+            "LIVE MODE on %s %s. The bot caps exposure at %sx equity; the account's "
+            "own leverage setting is separate (tradebot does not change it).",
+            config.exchange,
+            config.venue_name,
             config.risk.max_leverage,
         )
 

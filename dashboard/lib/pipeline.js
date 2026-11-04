@@ -37,6 +37,7 @@
     already_in_position: "มีไม้ค้างอยู่แล้ว",
     too_many_positions: "ไม้เต็มเพดาน",
     qty_rounds_to_zero: "ทุนน้อยเกินไปสำหรับ stop นี้",
+    below_min_size: "ออเดอร์เล็กกว่าขนาดขั้นต่ำของตลาด",
     below_min_notional: "ออเดอร์เล็กกว่าขั้นต่ำของตลาด",
     exceeds_exposure: "เกินเพดาน exposure",
     bad_instrument: "สเปคสินค้าหรือราคาใช้ไม่ได้",

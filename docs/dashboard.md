@@ -9,7 +9,7 @@ Cards can be dragged and their positions stick; a minimap and zoom bar sit in
 the bottom right, and a labelled group frame wraps the five pipeline stages.
 
 ```bash
-hyperbot --dry-run --paper-walk --iterations 60     # window 1: the bot
+tradebot --dry-run --paper-walk --iterations 60     # window 1: the bot
 node dashboard/server.js --open                     # window 2: the dashboard
 ```
 
@@ -18,7 +18,7 @@ Thai usage guide: [dashboard/README.md](../dashboard/README.md).
 ## Why it reads files instead of talking to the bot
 
 ```
-hyperbot ──writes──> logs/audit.jsonl   one JSON line per decision
+tradebot ──writes──> logs/audit.jsonl   one JSON line per decision
                      logs/state.json    day's start equity, peak, halt flag
                            │
                            │  server.js tails the files (500ms poll)
@@ -30,7 +30,7 @@ The bot already wrote everything down, because an audit trail was a
 requirement before any dashboard existed. So the dashboard needs no hook into
 the trading loop, no socket in the engine, no shared memory:
 
-- **The trading loop keeps its timing.** Nothing in `hyperbot` waits on a web
+- **The trading loop keeps its timing.** Nothing in `tradebot` waits on a web
   server, serialises for a browser, or blocks on a slow client.
 - **The dashboard cannot affect trading.** It is read-only by construction,
   not by discipline. There is no code path from the page to an order.
