@@ -1,0 +1,88 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "setup: create venv",
+      "detail": "Run this first, then pick .venv as the interpreter (Ctrl+Shift+P, 'Python: Select Interpreter').",
+      "type": "shell",
+      "command": "python -m venv .venv",
+      "problemMatcher": []
+    },
+    {
+      "label": "setup: install for development",
+      "detail": "Installs the package and the dev tools into the selected interpreter.",
+      "type": "shell",
+      "command": "python -m pip install -e \".[dev]\"",
+      "problemMatcher": []
+    },
+    {
+      "label": "setup: install the Hyperliquid SDK (live trading only)",
+      "type": "shell",
+      "command": "python -m pip install -e \".[hyperliquid]\"",
+      "problemMatcher": []
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "python -m pytest",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: with coverage",
+      "type": "shell",
+      "command": "python -m pytest --cov=hyperbot --cov-report=term-missing",
+      "problemMatcher": []
+    },
+    {
+      "label": "test: including testnet integration (places real orders)",
+      "type": "shell",
+      "command": "python -m pytest --run-integration",
+      "problemMatcher": []
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "python -m ruff check hyperbot tests tools",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "format",
+      "type": "shell",
+      "command": "python -m black hyperbot tests tools",
+      "problemMatcher": []
+    },
+    {
+      "label": "ai files: rebuild",
+      "detail": "Regenerates AGENTS.md, CLAUDE.md, .claude/ and .github/ from ai/.",
+      "type": "shell",
+      "command": "python tools/build_agent_files.py",
+      "problemMatcher": []
+    },
+    {
+      "label": "ai files: check up to date",
+      "type": "shell",
+      "command": "python tools/build_agent_files.py --check",
+      "problemMatcher": []
+    },
+    {
+      "label": "bot: dry run",
+      "type": "shell",
+      "command": "python -m hyperbot.cli.main --dry-run --iterations 20",
+      "problemMatcher": []
+    },
+    {
+      "label": "bot: doctor",
+      "type": "shell",
+      "command": "python -m hyperbot.cli.main --dry-run --doctor",
+      "problemMatcher": []
+    },
+    {
+      "label": "checks: everything before a commit",
+      "dependsOrder": "sequence",
+      "dependsOn": ["lint", "test", "ai files: check up to date"],
+      "problemMatcher": []
+    }
+  ]
+}

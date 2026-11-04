@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyperbot"
+version = "2.0.0"
+description = "Trading bot for Hyperliquid perpetuals with a pure, testable risk gate"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "borntoquantdev" }]
+keywords = ["trading", "hyperliquid", "perpetual-futures", "risk-management"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Topic :: Office/Business :: Financial :: Investment",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+]
+
+# The core package runs, and its whole test suite passes, with nothing but
+# PyYAML installed.  Everything that talks to the exchange lives in the
+# "hyperliquid" extra, so paper trading and unit tests never need the SDK or
+# any credentials.
+dependencies = ["pyyaml>=6.0"]
+
+[project.optional-dependencies]
+hyperliquid = [
+  "hyperliquid-python-sdk>=0.9.0",
+  "eth-account>=0.10.0",
+]
+dev = [
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+  "ruff>=0.4.0",
+  "black>=24.0.0",
+  "mypy>=1.8.0",
+  "types-PyYAML",
+]
+
+[project.scripts]
+hyperbot = "hyperbot.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/borntoquantdev-star/hyperliquid-bot"
+Repository = "https://github.com/borntoquantdev-star/hyperliquid-bot"
+
+[tool.setuptools.packages.find]
+include = ["hyperbot*"]
+
+[tool.setuptools.package-data]
+hyperbot = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# No --cov here on purpose: a bare `pytest` must work with only the dev extra
+# installed.  Coverage is a task you opt into (see .vscode/tasks.json).
+addopts = "-q --strict-markers"
+markers = [
+  "integration: talks to a live exchange; skipped unless --run-integration is passed",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+warn_redundant_casts = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

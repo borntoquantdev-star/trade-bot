@@ -1,0 +1,51 @@
+{
+  // The interpreter is the project virtual environment. On macOS and Linux
+  // change this to "${workspaceFolder}/.venv/bin/python".
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true,
+
+  // Tests: the default run is offline, so the Test Explorer is safe to use.
+  // Integration tests that place real orders stay skipped without
+  // --run-integration (see tests/conftest.py).
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"],
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.formatOnSave": true,
+    "editor.rulers": [100],
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "black-formatter.args": ["--line-length", "100"],
+  "ruff.lineLength": 100,
+
+  // The repository is pinned to LF so diffs stay clean across machines.
+  "files.eol": "\n",
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.egg-info": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/logs": true
+  },
+
+  // Never let the editor offer to commit a filled-in config or a log file.
+  "files.watcherExclude": {
+    "**/logs/**": true
+  },
+
+  "yaml.schemas": {},
+  "editor.wordWrapColumn": 100
+}

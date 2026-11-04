@@ -1,0 +1,9 @@
+# Installing this file installs the project itself, so the dependency list
+# lives in exactly one place: pyproject.toml.
+#
+#   pip install -r requirements.txt        offline development + tests
+#   pip install -e ".[dev,grvt]"           adds the GRVT SDK for live trading
+#
+# The GRVT SDK is deliberately NOT part of the default install: paper trading
+# (--dry-run) and the whole test suite run without it.
+-e .[dev]

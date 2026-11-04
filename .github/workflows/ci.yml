@@ -1,0 +1,33 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline:
+    # Everything here runs without credentials, without the exchange SDK and
+    # without a network call to Hyperliquid. Integration tests need --run-integration
+    # and are never enabled in CI.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check hyperbot tests tools
+      - name: Format check
+        run: python -m black --check hyperbot tests tools
+      - name: Types
+        run: python -m mypy hyperbot
+      - name: Tests
+        run: python -m pytest
+      - name: Generated AI files are up to date
+        run: python tools/build_agent_files.py --check

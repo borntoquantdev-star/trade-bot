@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "ms-python.black-formatter",
+    "charliermarsh.ruff",
+    "redhat.vscode-yaml",
+    "anthropic.claude-code",
+    "openai.chatgpt",
+    "github.copilot",
+    "github.copilot-chat"
+  ]
+}
