@@ -354,6 +354,8 @@ def load_config(
     """
     merged = raw_defaults()
     source = "<defaults>"
+    # จำไว้ว่าผู้ใช้ระบุ exchange เองหรือไม่ ก่อนที่ค่า default จะกลบ
+    exchange_was_set = False
 
     if path is not None:
         file_path = Path(path)
@@ -366,10 +368,12 @@ def load_config(
             loaded = yaml.safe_load(handle) or {}
         if not isinstance(loaded, Mapping):
             raise ConfigError(f"{file_path} must contain a YAML mapping at the top level")
+        exchange_was_set = exchange_was_set or "exchange" in loaded
         _deep_merge(merged, _expand_env(loaded))
         source = str(file_path)
 
     if data:
+        exchange_was_set = exchange_was_set or "exchange" in data
         _deep_merge(merged, _expand_env(data))
         if source == "<defaults>":
             source = "<dict>"
@@ -382,11 +386,13 @@ def load_config(
             merged[section][key] = environ[var]
         else:
             merged[key] = environ[var]
+            if key == "exchange":
+                exchange_was_set = True
 
-    return _build(merged, source)
+    return _build(merged, source, exchange_was_set)
 
 
-def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
+def _build(raw: Mapping[str, Any], source: str, exchange_was_set: bool = True) -> BotConfig:
     exchange = str(raw.get("exchange", "grvt")).strip().lower()
     if exchange not in EXCHANGES:
         raise ConfigError(f"exchange must be one of {EXCHANGES}, got {exchange!r}")
@@ -441,7 +447,7 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
         raise ConfigError("trading.warmup_candles cannot be negative")
 
     symbol = str(trading_raw.get("symbol", "") or "").strip() or venue_defaults["symbol"]
-    _check_symbol_shape(exchange, symbol)
+    _check_symbol_shape(exchange, symbol, source, exchange_was_set)
 
     trading = TradingSettings(
         symbol=symbol,
@@ -508,25 +514,43 @@ def _build(raw: Mapping[str, Any], source: str) -> BotConfig:
     )
 
 
-def _check_symbol_shape(exchange: str, symbol: str) -> None:
+def _check_symbol_shape(
+    exchange: str,
+    symbol: str,
+    source: str = "<defaults>",
+    exchange_was_set: bool = False,
+) -> None:
     """Catch a symbol written for the other venue before it reaches the API.
 
     GRVT names instruments like ``BTC_USDT_Perp``; Hyperliquid uses the bare
-    coin, ``BTC``. Sending one to the other fails with an unhelpful error, so
-    it is worth refusing here where the message can say what to write instead.
+    coin, ``BTC``. Sending one to the other fails with an unhelpful error from
+    the exchange, so it is refused here where the message can name the file to
+    edit - which matters most when an older config predates the setting.
     """
     if not symbol:
         raise ConfigError("trading.symbol cannot be empty")
-    if exchange == "grvt" and "_" not in symbol:
-        raise ConfigError(
-            f"trading.symbol {symbol!r} does not look like a GRVT instrument. "
-            "GRVT uses names like BTC_USDT_Perp; the bare coin is Hyperliquid's style."
-        )
-    if exchange == "hyperliquid" and "_" in symbol:
-        raise ConfigError(
-            f"trading.symbol {symbol!r} does not look like a Hyperliquid perp. "
-            "Hyperliquid uses the coin on its own, such as BTC or ETH."
-        )
+
+    looks_like_grvt = "_" in symbol
+    if (exchange == "grvt") == looks_like_grvt:
+        return
+
+    other = "hyperliquid" if exchange == "grvt" else "grvt"
+    expected = (
+        "names like BTC_USDT_Perp" if exchange == "grvt" else "the coin on its own, such as BTC"
+    )
+    where = (
+        f"exchange is {exchange!r}"
+        if exchange_was_set
+        else f"exchange is {exchange!r}, which is the default - your config does not set it"
+    )
+    raise ConfigError(
+        f"trading.symbol {symbol!r} does not look like a {exchange.upper()} instrument.\n"
+        f"  config:   {source}\n"
+        f"  {where}\n"
+        f"{exchange.upper()} uses {expected}.\n"
+        f"Either set `exchange: {other}`, write a {exchange.upper()}-style symbol, or "
+        "leave trading.symbol empty to take the venue's default."
+    )
 
 
 def describe(config: BotConfig) -> str:

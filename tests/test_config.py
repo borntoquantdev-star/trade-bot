@@ -89,6 +89,24 @@ def test_a_hyperliquid_symbol_on_grvt_is_refused():
         load_config(data={"exchange": "grvt", "trading": {"symbol": "BTC"}}, env={})
 
 
+def test_the_symbol_error_names_the_file_and_both_ways_out(tmp_path):
+    """An old config predating `exchange:` must say where to go and fix it."""
+    path = write(tmp_path, 'trading:\n  symbol: "BTC"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path, env={})
+    message = str(exc.value)
+    assert str(path) in message, "ต้องบอกว่าไฟล์ไหน"
+    assert "which is the default" in message, "ต้องบอกว่า exchange มาจากค่า default"
+    assert "exchange: hyperliquid" in message, "ต้องเสนอทางแก้ที่หนึ่ง"
+    assert "leave trading.symbol empty" in message, "ต้องเสนอทางแก้ที่สอง"
+
+
+def test_an_explicit_exchange_is_not_blamed_on_the_default():
+    with pytest.raises(ConfigError) as exc:
+        load_config(data={"exchange": "grvt", "trading": {"symbol": "BTC"}}, env={})
+    assert "which is the default" not in str(exc.value)
+
+
 def test_a_grvt_symbol_on_hyperliquid_is_refused():
     with pytest.raises(ConfigError, match="coin on its own"):
         load_config(
