@@ -1,9 +1,12 @@
 # The dashboard
 
-A page that shows what the bot is doing right now: the market it sees, the
-signal the strategy produced, whether the risk gate approved it, and what
-reached the exchange — as five nodes wired together, updating the moment the
-bot records a new decision.
+A pannable, zoomable canvas showing what the bot is doing right now: the
+market it sees, the signal the strategy produced, whether the risk gate
+approved it, and what reached the exchange — as cards wired together, updating
+the moment the bot records a new decision.
+
+Cards can be dragged and their positions stick; a minimap and zoom bar sit in
+the bottom right, and a labelled group frame wraps the five pipeline stages.
 
 ```bash
 hyperbot --dry-run --paper-walk --iterations 60     # window 1: the bot
@@ -61,10 +64,13 @@ designing bots by interview. Four things were worth lifting:
 
 | From that app | Used here |
 |---|---|
-| `.ta-chain` / `.ta-node` cards | the five stage cards, border colour per state |
+| the camera `(x, y, scale)` as one transform on a layer | pan, wheel zoom, Fit |
+| `.node` + `.node-head` cards, absolutely positioned | the eight cards, head colour per state |
+| `.group` + `.group-label` | the frame around the five pipeline stages |
+| `.board-wires path` | SVG dashed connectors with animated flow |
 | `chain(session)` | a pure state-to-nodes function, here over audit rows |
-| `.board-wires path` | SVG dashed connectors, `#61b0e8`, `6 4` dash |
 | `spark()` | the price chart: one SVG polyline, no chart library |
+| minimap, zoom bar, status strip | the same bottom-corner furniture |
 
 Its tokens came along too (`--accent #5fb4ff`, `--ok #5fd39a`,
 `--warn #ffd166`, `--bad #ff8a8a` on a `#0b0b0b` canvas), so the two feel like

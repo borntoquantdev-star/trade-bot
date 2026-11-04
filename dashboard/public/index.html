@@ -3,59 +3,62 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hyperbot — dashboard</title>
+<title>hyperbot — canvas</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<!-- แถบบน -->
 <header class="top">
-  <h1>บอทกำลังทำอะไรอยู่ <span class="sym" id="symbol"></span></h1>
+  <div class="brand"><span class="mark">hb</span><b>hyperbot</b></div>
+  <div class="tabs"><button class="tab on" id="tabName">live</button></div>
   <span class="spacer"></span>
-  <span class="live off" id="live"><span class="dot"></span><span id="liveText">กำลังต่อ...</span></span>
+  <span class="pill" id="pillSymbol">—</span>
+  <span class="pill" id="pillMode"><i class="dot"></i><span>paper</span></span>
+  <span class="pill" id="pillLive"><i class="dot"></i><span>กำลังต่อ</span></span>
 </header>
 
+<!-- แถบเครื่องมือซ้าย -->
+<nav class="rail" aria-label="เครื่องมือ">
+  <button class="tool on" id="toolSelect" title="เลื่อน/เลือก (ลากพื้นที่ว่างเพื่อเลื่อน)">✛</button>
+  <button class="tool" id="toolFit" title="จัดให้พอดีจอ (F)">⤢</button>
+  <button class="tool" id="toolReset" title="คืนตำแหน่งการ์ดเป็นค่าเริ่มต้น">⟲</button>
+  <button class="tool" id="toolWires" title="ซ่อน/แสดงเส้นต่อ (W)">∿</button>
+  <button class="tool" id="toolPause" title="หยุด/เล่นการอัปเดต (space)">⏸</button>
+</nav>
+
+<!-- แบนเนอร์หยุด -->
 <div class="halt" id="halt" hidden>
   <b>บอทหยุดตัวเองแล้ว</b> — <span id="haltReason"></span>
-  <div style="margin-top:6px;font-size:12px">
-    อ่านเหตุผลให้เข้าใจก่อน แล้วค่อยปลดด้วย <code>hyperbot --resume</code>
-  </div>
+  <div class="halt-sub">อ่านเหตุผลให้เข้าใจก่อน แล้วค่อยปลดด้วย <code>hyperbot --resume</code></div>
 </div>
 
-<section class="cards" id="cards"></section>
+<p class="canvas-hint">ลากพื้นที่ว่างเพื่อเลื่อน · ลากหัวการ์ดเพื่อย้าย · ล้อเมาส์เพื่อซูม</p>
 
-<section class="section">
-  <h2>สายการทำงานของบอท</h2>
-  <div class="chain-wrap">
-    <svg class="chain-wires" id="wires" aria-hidden="true"></svg>
-    <div class="chain" id="chain"></div>
+<!-- แคนวาส -->
+<main class="canvas" id="canvas">
+  <div class="layer" id="layer">
+    <svg class="wires" id="wires" aria-hidden="true"></svg>
+    <div class="group" id="group"><span class="group-label" id="groupLabel">PIPELINE · สายการทำงานของบอท</span></div>
+    <div id="nodes"></div>
   </div>
-</section>
+</main>
 
-<section class="section">
-  <h2>ราคาที่บอทเห็น</h2>
-  <div class="chart-box">
-    <div class="chart-head">
-      <span class="last" id="chartLast">-</span>
-      <span class="range" id="chartRange"></span>
-    </div>
-    <svg class="spark" id="spark" viewBox="0 0 600 120" preserveAspectRatio="none"
-         role="img" aria-label="กราฟราคาที่บอทสังเกตได้"></svg>
-  </div>
-</section>
-
-<section class="section"><h2>การตัดสินใจล่าสุด</h2></section>
-<div class="log" id="log"></div>
-
-<div class="empty" id="empty" hidden>
-  ยังไม่มีการตัดสินใจใน <code>logs/audit.jsonl</code>
-  <div style="margin-top:10px">ลองรันบอทแบบกระดาษก่อน</div>
-  <code>hyperbot --dry-run --iterations 30</code>
+<!-- มุมขวาล่าง: มินิแมป + ซูม -->
+<div class="minimap" id="minimap"><svg id="minimapSvg" viewBox="0 0 160 100"></svg></div>
+<div class="zoombar">
+  <button id="zoomOut" title="ซูมออก">−</button>
+  <span id="zoomLevel">100%</span>
+  <button id="zoomIn" title="ซูมเข้า">+</button>
+  <button id="zoomFit" title="พอดีจอ">Fit</button>
 </div>
 
-<p class="foot">
-  หน้านี้อ่านไฟล์ที่บอทเขียนเท่านั้น — สั่งอะไรบอทไม่ได้ และไม่ได้ต่อตลาดเอง ·
-  ปิดหน้านี้หรือหยุดเซิร์ฟเวอร์ไม่กระทบบอทที่กำลังรัน
-</p>
+<!-- แถบล่าง -->
+<footer class="status">
+  <span id="statusLeft">กำลังต่อ...</span>
+  <span class="spacer"></span>
+  <span class="warn-note">อ่านอย่างเดียว · สั่งอะไรบอทไม่ได้จากหน้านี้</span>
+</footer>
 
 <script src="lib/pipeline.js"></script>
 <script src="app.js"></script>
