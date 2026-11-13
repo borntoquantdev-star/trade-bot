@@ -247,7 +247,10 @@ impl Default for Board {
         slots.insert("balance", Slot::new(40.0, 2320.0, 380.0, 260.0));
         slots.insert("positions", Slot::new(440.0, 2320.0, 540.0, 260.0));
         slots.insert("open_orders", Slot::new(1000.0, 2320.0, 540.0, 260.0));
-        slots.insert("orders", Slot::new(1560.0, 2320.0, 540.0, 600.0));
+        // As tall as its row now, to make room under it for the funding
+        // the account actually paid; it scrolls, so nothing is lost.
+        slots.insert("orders", Slot::new(1560.0, 2320.0, 540.0, 260.0));
+        slots.insert("paid_funding", Slot::new(1560.0, 2600.0, 540.0, 320.0));
         slots.insert("closed", Slot::new(40.0, 2600.0, 700.0, 320.0));
         slots.insert("fills", Slot::new(760.0, 2600.0, 780.0, 320.0));
         // The history zone. The list of runs is wide because a run is a
@@ -830,6 +833,7 @@ impl Board {
         self.orders_card(ui);
         self.closed_card(ui);
         self.fills_card(ui);
+        self.paid_funding_card(ui);
         self.runs_card(ui);
         self.calendar_card(ui);
         // Last, so the outlines sit on top of what they outline.
@@ -2517,6 +2521,72 @@ impl Board {
         }
     }
 
+    /// The funding the account was really charged, payment by payment.
+    ///
+    /// The market zone shows the funding *rate*; this shows what that rate
+    /// cost, which is a different thing for anyone who never holds across a
+    /// funding time - and the card says so, because an empty list here is a
+    /// lesson (short holds pay no funding) rather than a missing feature.
+    fn paid_funding_card(&mut self, ui: &mut egui::Ui) {
+        let mut slot = self.slot("paid_funding");
+        let rows = self.account_data.funding.clone();
+        let load = self.account_data.load_of(Acc::Funding).clone();
+        let net: f64 = rows.iter().filter_map(|row| row.effect()).sum();
+        let state = if rows.is_empty() {
+            theme::State::Idle
+        } else if net < 0.0 {
+            theme::State::Bad
+        } else {
+            theme::State::Ok
+        };
+        let status = if rows.is_empty() {
+            "ยังไม่เคยถูกเก็บ".to_string()
+        } else {
+            format!("{} ครั้ง · สุทธิ {}", rows.len(), money(net))
+        };
+        let (state, status) = stale_if_failed(&load, state, status);
+        card::show(
+            ui,
+            &mut slot,
+            "ค่าถือข้ามคืนที่ถูกเก็บจริง · จากตลาด",
+            &status,
+            state,
+            |ui| {
+                if rows.is_empty() {
+                    if matches!(load, Load::Ready) {
+                        ui.label(
+                            egui::RichText::new(FUNDING_NONE)
+                                .size(10.5)
+                                .color(theme::DIM),
+                        );
+                    } else {
+                        Self::no_account(ui, &load);
+                    }
+                    return;
+                }
+                columns(ui, "เวลา", "สัญญา", "ผลต่อบัญชี");
+                ui.spacing_mut().item_spacing.y = 0.0;
+                egui::ScrollArea::vertical()
+                    .id_salt("paid_funding")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for row in &rows {
+                            let effect = row.effect();
+                            let shown = match effect {
+                                Some(value) if value < 0.0 => {
+                                    format!("จ่าย {} {}", money(value), row.currency)
+                                }
+                                Some(value) => format!("ได้รับ {} {}", money(value), row.currency),
+                                None => "-".to_string(),
+                            };
+                            trade_row(ui, &row.at, &row.instrument, &shown, colour_of(effect));
+                        }
+                    });
+            },
+        );
+        self.put("paid_funding", slot);
+    }
+
     /// Every run the bot has made, newest first.
     ///
     /// A run is the unit a person thinks in - "that time I left it on over
@@ -3773,6 +3843,10 @@ struct Strip {
     /// Leading spaces every line of the function shares.
     indent: usize,
 }
+
+/// Said by the paid-funding card when the account has never been charged.
+const FUNDING_NONE: &str = "ยังไม่เคยถูกเก็บ funding · ตลาดเก็บเฉพาะไม้ที่ถือข้ามเวลาเก็บ \
+     (ดูเวลาถัดไปในการ์ด funding โซนตลาด) บอทที่ถือไม้ไม่กี่นาทีจึงมักไม่โดนเลย";
 
 /// How long a line stays lit after the tick that ran it, in seconds.
 const FLASH: f64 = 0.9;
@@ -5450,6 +5524,7 @@ mod tests {
                     "orders",
                     "closed",
                     "fills",
+                    "paid_funding",
                 ],
             ),
             (4, &["runs", "calendar"]),
@@ -6322,5 +6397,43 @@ mod tests {
             open.covers("2026-11-14T00:00:00+00:00"),
             "still going covers what follows"
         );
+    }
+
+    // -------------------------------------------------------- paid funding
+
+    #[test]
+    fn the_funding_card_prints_a_payment_as_money_out() {
+        let mut board = Board::default();
+        board.account_data.funding = account::read_funding(&serde_json::json!([{
+            "event_time_at": "2026-11-13T16:00:00Z",
+            "instrument": "BTC_USDT_Perp",
+            "currency": "USDT",
+            "amount": "0.4213"
+        }]));
+        let painted = painted_text(&mut board).join("\n");
+        assert!(painted.contains("จ่าย -0.42 USDT"), "{painted}");
+        assert!(painted.contains("23:00:00"), "เวลาไทย · {painted}");
+    }
+
+    /// No cards overlap in a zone: the paid-funding card was fitted in by
+    /// shortening the order history, and the two must not sit on each other.
+    #[test]
+    fn the_account_zone_cards_do_not_overlap() {
+        let board = Board::default();
+        let ids = [
+            "balance",
+            "positions",
+            "open_orders",
+            "orders",
+            "closed",
+            "fills",
+            "paid_funding",
+        ];
+        for (index, a) in ids.iter().enumerate() {
+            for b in &ids[index + 1..] {
+                let (ra, rb) = (board.slots[a].rect(), board.slots[b].rect());
+                assert!(!ra.intersects(rb), "{a} ทับ {b}");
+            }
+        }
     }
 }

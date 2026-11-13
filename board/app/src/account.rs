@@ -32,7 +32,8 @@ use crate::exchange::{clock, Num};
 /// Money and positions move with the market; a list of closed trades does
 /// not, and asking for it every second would be noise on somebody's
 /// connection for no gain on screen.
-const EVERY: [f64; 6] = [3.0, 3.0, 4.0, 20.0, 20.0, 30.0];
+// Funding last: it is charged on the hour at most, so a minute is plenty.
+const EVERY: [f64; 7] = [3.0, 3.0, 4.0, 20.0, 20.0, 30.0, 60.0];
 
 /// How many rows of each history. Enough to fill a card and scroll a little.
 const ROWS: u32 = 40;
@@ -45,16 +46,20 @@ pub enum Kind {
     Orders,
     Fills,
     Closed,
+    /// Funding the account was charged or paid - not the rate, which is
+    /// public and lives in the market zone, but the money that moved.
+    Funding,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Balance,
         Kind::Positions,
         Kind::OpenOrders,
         Kind::Orders,
         Kind::Fills,
         Kind::Closed,
+        Kind::Funding,
     ];
 
     fn index(self) -> usize {
@@ -65,6 +70,7 @@ impl Kind {
             Kind::Orders => 3,
             Kind::Fills => 4,
             Kind::Closed => 5,
+            Kind::Funding => 6,
         }
     }
 
@@ -78,6 +84,7 @@ impl Kind {
             Kind::Orders => format!("/api/account/order_history?limit={ROWS}"),
             Kind::Fills => format!("/api/account/fills?limit={ROWS}"),
             Kind::Closed => format!("/api/account/closed?limit={ROWS}"),
+            Kind::Funding => format!("/api/account/funding?limit={ROWS}"),
         }
     }
 }
@@ -189,6 +196,27 @@ pub struct Fill {
     pub realized: Option<Num>,
     pub currency: String,
     pub at: String,
+}
+
+/// One funding payment, as the exchange recorded it.
+///
+/// GRVT's own definition (`FundingPayment` in its SDK): `amount` is
+/// **positive when the account paid and negative when it received** - the
+/// opposite of the sign most people expect from a balance. The card turns it
+/// round so that money out reads as a minus, like every other figure here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FundingPayment {
+    pub instrument: String,
+    pub currency: String,
+    pub amount: Option<Num>,
+    pub at: String,
+}
+
+impl FundingPayment {
+    /// What this payment did to the account: negative when it cost money.
+    pub fn effect(&self) -> Option<f64> {
+        self.amount.as_ref().map(|amount| -amount.value)
+    }
 }
 
 /// A position that is over, with the whole story in one row.
@@ -335,6 +363,18 @@ pub fn read_fills(result: &Value) -> Vec<Fill> {
         .collect()
 }
 
+pub fn read_funding(result: &Value) -> Vec<FundingPayment> {
+    rows_of(result)
+        .into_iter()
+        .map(|row| FundingPayment {
+            instrument: text_of(row.get("instrument")),
+            currency: text_of(row.get("currency")),
+            amount: Num::from(row.get("amount")),
+            at: clock(&text_of(row.get("event_time_at"))),
+        })
+        .collect()
+}
+
 pub fn read_closed(result: &Value) -> Vec<Closed> {
     rows_of(result)
         .into_iter()
@@ -381,6 +421,7 @@ enum Got {
     Orders(Answer<Vec<Order>>),
     Fills(Answer<Vec<Fill>>),
     Closed(Answer<Vec<Closed>>),
+    Funding(Answer<Vec<FundingPayment>>),
 }
 
 enum Answer<T> {
@@ -396,11 +437,12 @@ pub struct Account {
     pub orders: Vec<Order>,
     pub fills: Vec<Fill>,
     pub closed: Vec<Closed>,
-    pub load: [Load; 6],
+    pub funding: Vec<FundingPayment>,
+    pub load: [Load; 7],
     tx: Sender<Got>,
     rx: Receiver<Got>,
-    due: [f64; 6],
-    flight: [Option<f64>; 6],
+    due: [f64; 7],
+    flight: [Option<f64>; 7],
 }
 
 impl Default for Account {
@@ -413,7 +455,9 @@ impl Default for Account {
             orders: Vec::new(),
             fills: Vec::new(),
             closed: Vec::new(),
+            funding: Vec::new(),
             load: [
+                Load::Idle,
                 Load::Idle,
                 Load::Idle,
                 Load::Idle,
@@ -423,8 +467,8 @@ impl Default for Account {
             ],
             tx,
             rx,
-            due: [0.0; 6],
-            flight: [None; 6],
+            due: [0.0; 7],
+            flight: [None; 7],
         }
     }
 }
@@ -458,6 +502,9 @@ impl Account {
                 Got::Orders(answer) => self.take(Kind::Orders, answer, |me, rows| me.orders = rows),
                 Got::Fills(answer) => self.take(Kind::Fills, answer, |me, rows| me.fills = rows),
                 Got::Closed(answer) => self.take(Kind::Closed, answer, |me, rows| me.closed = rows),
+                Got::Funding(answer) => {
+                    self.take(Kind::Funding, answer, |me, rows| me.funding = rows)
+                }
             }
         }
     }
@@ -534,6 +581,7 @@ fn decode(kind: Kind, result: Result<ehttp::Response, String>) -> Got {
         Kind::Orders => Got::Orders(Answer::Have(read_orders(&result))),
         Kind::Fills => Got::Fills(Answer::Have(read_fills(&result))),
         Kind::Closed => Got::Closed(Answer::Have(read_closed(&result))),
+        Kind::Funding => Got::Funding(Answer::Have(read_funding(&result))),
     }
 }
 
@@ -545,6 +593,7 @@ fn missing(kind: Kind, reason: String) -> Got {
         Kind::Orders => Got::Orders(Answer::Missing(reason)),
         Kind::Fills => Got::Fills(Answer::Missing(reason)),
         Kind::Closed => Got::Closed(Answer::Missing(reason)),
+        Kind::Funding => Got::Funding(Answer::Missing(reason)),
     }
 }
 
@@ -556,6 +605,7 @@ fn failed(kind: Kind, reason: String) -> Got {
         Kind::Orders => Got::Orders(Answer::Failed(reason)),
         Kind::Fills => Got::Fills(Answer::Failed(reason)),
         Kind::Closed => Got::Closed(Answer::Failed(reason)),
+        Kind::Funding => Got::Funding(Answer::Failed(reason)),
     }
 }
 
@@ -744,5 +794,49 @@ mod tests {
         account.load[0] = Load::Missing("ยังไม่ได้ตั้งกุญแจ".into());
         assert!(!account.has_key());
         assert_eq!(account.why_not(), Some("ยังไม่ได้ตั้งกุญแจ"));
+    }
+
+    // ----------------------------------------------------------- funding
+
+    /// Shaped exactly like GRVT's `FundingPayment`, as the board's server
+    /// passes it on with the readable twin of `event_time` added.
+    fn payments() -> Value {
+        json!([
+            {
+                "event_time": "1794588431000000000",
+                "event_time_at": "2026-11-13T16:47:11Z",
+                "sub_account_id": "1234",
+                "instrument": "BTC_USDT_Perp",
+                "currency": "USDT",
+                "amount": "0.4213",
+                "tx_id": "77"
+            },
+            {
+                "event_time": "1794592031000000000",
+                "event_time_at": "2026-11-13T17:47:11Z",
+                "instrument": "BTC_USDT_Perp",
+                "currency": "USDT",
+                "amount": "-0.1000",
+                "tx_id": "78"
+            }
+        ])
+    }
+
+    #[test]
+    fn a_funding_payment_is_read_as_the_exchange_wrote_it() {
+        let rows = read_funding(&payments());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].instrument, "BTC_USDT_Perp");
+        assert_eq!(rows[0].amount.as_ref().unwrap().text, "0.4213");
+        assert_eq!(rows[0].at, "23:47:11", "เวลาไทย");
+    }
+
+    /// GRVT counts a payment as positive when the account paid. The card
+    /// must not repeat that sign, or paying funding reads as earning it.
+    #[test]
+    fn paying_funding_is_a_minus_on_the_card_and_receiving_it_is_a_plus() {
+        let rows = read_funding(&payments());
+        assert!((rows[0].effect().unwrap() - -0.4213).abs() < 1e-12, "paid");
+        assert!((rows[1].effect().unwrap() - 0.1).abs() < 1e-12, "received");
     }
 }
