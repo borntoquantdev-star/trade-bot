@@ -32,6 +32,10 @@ const STALE_AFTER: f64 = 30.0;
 /// changes when somebody edits the config file.
 const PLAN_EVERY: f64 = 60.0;
 
+/// The two ways a Python docstring opens.
+const DOUBLE_DOC: &str = "\"\"\"";
+const SINGLE_DOC: &str = "'''";
+
 /// A file and the line its `def` is on - what a trace calls a function.
 pub type Key = (String, usize);
 
@@ -115,18 +119,77 @@ impl Source {
             .collect()
     }
 
+    /// Leading spaces every non-blank line of this function shares.
+    ///
+    /// A method sits four spaces into its class and its body eight; none of
+    /// that says anything about the code, and a narrow card would rather
+    /// spend the room on the code.
+    pub fn indent(&self) -> usize {
+        self.lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.len() - line.trim_start().len())
+            .min()
+            .unwrap_or(0)
+    }
+
     /// The first lines of the body, for a card with no trace to show.
     ///
     /// What a stage card falls back to before the bot has ever run: the code
     /// is still the code, it simply has nothing lit up on it yet.
     pub fn head(&self, max: usize) -> Vec<(usize, &str, u64)> {
+        // The signature may run over several lines, and a docstring often
+        // follows it: neither is the code. Five lines of a card spent on
+        // "Send an approved order as a limit..." are five lines not showing
+        // the send.
         self.lines
             .iter()
             .enumerate()
-            .skip(1)
+            .skip(self.body_start())
             .take(max)
             .map(|(offset, text)| (self.first + offset, text.as_str(), 0))
             .collect()
+    }
+
+    /// Where the code of the body starts, past the signature and any
+    /// docstring, as an offset into `lines`.
+    fn body_start(&self) -> usize {
+        // Past the signature: the first line that closes its brackets and
+        // ends with a colon.
+        let mut open = 0i32;
+        let mut index = 0;
+        while index < self.lines.len() {
+            let line = &self.lines[index];
+            for character in line.chars() {
+                match character {
+                    '(' | '[' | '{' => open += 1,
+                    ')' | ']' | '}' => open -= 1,
+                    _ => {}
+                }
+            }
+            index += 1;
+            if open <= 0 && line.trim_end().ends_with(':') {
+                break;
+            }
+        }
+        // Past a docstring, one line or many, in either kind of quote.
+        let Some(first) = self.lines.get(index) else {
+            return index.min(self.lines.len());
+        };
+        let trimmed = first.trim();
+        let Some(quote) = [DOUBLE_DOC, SINGLE_DOC]
+            .into_iter()
+            .find(|quote| trimmed.starts_with(quote))
+        else {
+            return index;
+        };
+        if trimmed.len() >= 2 * quote.len() && trimmed[quote.len()..].contains(quote) {
+            return index + 1;
+        }
+        (index + 1..self.lines.len())
+            .find(|end| self.lines[*end].contains(quote))
+            .map(|end| end + 1)
+            .unwrap_or(index)
     }
 
     /// The steps of `walk` that are inside this function, in order.
@@ -207,13 +270,11 @@ fn rules(stage: usize) -> &'static [Rule] {
         ],
         // 3. the gate - one function, and the most important one on the board
         2 => &[("risk.py", "risk_gate"), ("risk.py", "")],
-        // 4. the broker, actually sending something
-        3 => &[
-            ("", "place_order"),
-            ("", "close_position"),
-            ("brokers/", ""),
-            ("core/engine.py", "tick"),
-        ],
+        // 4. the broker, actually sending something. Only the two
+        //    functions that send: "any broker function" let a quiet tick's
+        //    price read stand in for an order, which is the one thing this
+        //    card must never suggest happened.
+        3 => &[("", "place_order"), ("", "close_position")],
         // 5. the position: closing it is `_close`, holding it is whatever
         //    read it back off the exchange
         4 => &[
@@ -623,10 +684,9 @@ mod tests {
             call("tradebot/strategies/ping_pong.py", "get_signal", 77),
         ];
         assert!(candidates(2, &calls).is_empty(), "the gate never ran");
-        assert_eq!(
-            candidates(3, &calls)[0].func,
-            "tick",
-            "nothing was sent, so the card falls back to the loop itself"
+        assert!(
+            candidates(3, &calls).is_empty(),
+            "nothing was sent, so the send-order card has nothing that ran to show"
         );
     }
 
@@ -820,6 +880,53 @@ mod tests {
         assert!(read_stages(&serde_json::json!({"present": false})).is_empty());
         assert!(read_stages(&serde_json::json!({"stages": "nonsense"})).is_empty());
         assert!(read_stages(&serde_json::json!([])).is_empty());
+    }
+
+    #[test]
+    fn the_head_of_a_function_skips_a_docstring_and_a_wrapped_signature() {
+        let source = Source {
+            file: "x.py".into(),
+            func: "place_order".into(),
+            first: 452,
+            lines: vec![
+                "    def place_order(".into(),
+                "        self, order: SizedOrder".into(),
+                "    ) -> OrderReceipt:".into(),
+                format!("        {DOUBLE_DOC}Send an approved order as a limit."),
+                "".into(),
+                format!("        Limit, not market.{DOUBLE_DOC}"),
+                "        client = self._require_client()".into(),
+                "        return client.send(order)".into(),
+            ],
+        };
+        let head: Vec<usize> = source.head(2).into_iter().map(|(n, _, _)| n).collect();
+        assert_eq!(head, vec![458, 459], "straight to the first line of code");
+    }
+
+    #[test]
+    fn a_one_line_docstring_is_skipped_as_one_line() {
+        let source = Source {
+            file: "x.py".into(),
+            func: "f".into(),
+            first: 1,
+            lines: vec![
+                "def f():".into(),
+                format!("    {SINGLE_DOC}Return one.{SINGLE_DOC}"),
+                "    return 1".into(),
+            ],
+        };
+        assert_eq!(source.head(1)[0].0, 3);
+    }
+
+    #[test]
+    fn a_function_with_no_docstring_starts_right_after_its_signature() {
+        let source = Source {
+            file: "x.py".into(),
+            func: "f".into(),
+            first: 10,
+            lines: vec!["def f(x):".into(), "    return x".into()],
+        };
+        assert_eq!(source.head(5)[0].0, 11);
     }
 
     #[test]

@@ -64,6 +64,32 @@ const WIRES: [(&str, &str); 6] = [
     ("s4", "log"),
 ];
 
+/// ASCII names for the zones, in the same order as `VIEWS`, for a link or
+/// an environment variable - places where typing Thai is a nuisance.
+const VIEW_ALIASES: [&str; 5] = ["market", "bot", "test", "account", "history"];
+
+/// `%E0%B8%9A` back to the bytes it stands for. Anything that is not a
+/// well-formed escape is kept as it was, and bytes that do not make UTF-8
+/// are replaced rather than allowed to fail the whole name.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let pair = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+            if let Some(byte) = pair.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn view(index: usize) -> Rect {
     let [x0, y0, x1, y1, _] = VIEWS[index].1;
     Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1))
@@ -272,6 +298,29 @@ impl Board {
                 here.y = slot.y;
                 self.slots.insert(id, here);
             }
+        }
+    }
+
+    /// Open on a named zone - `bot`, `history`, or the Thai label itself.
+    ///
+    /// So a lesson can link straight to the part of the board it is about,
+    /// instead of telling a room of students to find the right button.
+    /// Unknown names are ignored and the board opens where it always does.
+    pub fn open_at(&mut self, name: &str) -> bool {
+        // A URL fragment arrives percent-encoded, so `#บอท` reaches the
+        // page as `#%E0%B8%9A...`; decoded here rather than in the browser
+        // glue so the native tests can see it happen.
+        let wanted = percent_decode(name.trim().trim_start_matches('#')).to_lowercase();
+        let found = VIEWS
+            .iter()
+            .zip(VIEW_ALIASES)
+            .position(|((label, _), alias)| wanted == *label || wanted == alias);
+        match found {
+            Some(index) => {
+                self.scene_rect = view(index);
+                true
+            }
+            None => false,
         }
     }
 
@@ -1698,6 +1747,7 @@ impl Board {
                 total: 0,
                 live: ran,
                 glow: BTreeMap::new(),
+                indent: 0,
             };
         };
         let hits = if ran {
@@ -1732,6 +1782,7 @@ impl Board {
             total,
             live: ran,
             glow,
+            indent: source.indent(),
         }
     }
 
@@ -1793,6 +1844,13 @@ impl Board {
     fn why_quiet(&self) -> Quiet {
         if self.bot.rows.is_empty() {
             return Quiet::NeverRan;
+        }
+        // The bot recorded this tick; this stage's code simply was not part
+        // of it. A tick with no signal never reaches the gate, and that is
+        // the lesson the card should be teaching - not a complaint that the
+        // bot forgot to write something down.
+        if self.trace().is_some() {
+            return Quiet::NotReached;
         }
         if self.code.from_bot() {
             Quiet::OldBot
@@ -1971,6 +2029,10 @@ impl Board {
         }
         ui.spacing_mut().item_spacing.y = 0.0;
         for (number, text, hits) in &strip.lines {
+            // The indentation every line of the function shares says
+            // nothing, and on a card this narrow it is the difference
+            // between reading `return None` and reading `retur`.
+            let text = text.get(strip.indent.min(text.len())..).unwrap_or(text);
             code_line(
                 ui,
                 Shown {
@@ -2044,6 +2106,10 @@ impl Board {
         let walking = steps.get(at).copied();
         let glow = glow_of(&steps, at);
         let paused = self.paused_at.is_some();
+        // Follow the head down the page while it walks. Paused, the page is
+        // the reader's: they stopped it to read something, and dragging the
+        // view back to the head would take that away.
+        let follow = !paused;
         let mut toggle = false;
         let (state, status) = match (&source, ran) {
             (Some(source), true) => {
@@ -2200,34 +2266,45 @@ impl Board {
                 );
                 ui.add_space(3.0);
                 ui.spacing_mut().item_spacing.y = 0.0;
-                egui::ScrollArea::vertical()
+                // Where the scroll should be, worked out rather than asked
+                // of egui. `scroll_to_rect` inside a zoomed Scene measured
+                // the line in the wrong space and parked the view ten lines
+                // below the head - so the one card wide enough to read was
+                // the one card where the highlight could not be seen.
+                let viewport = ui.available_height();
+                let target = match (walking, follow) {
+                    (Some(line), true) => Some(line),
+                    _ if jump => entered,
+                    _ => None,
+                };
+                let mut area = egui::ScrollArea::vertical()
                     .id_salt("code")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for (number, text, count) in source.walk(&hits) {
-                            let on_it = walking == Some(number);
-                            let rect = code_line(
-                                ui,
-                                Shown {
-                                    number,
-                                    text,
-                                    hits: count,
-                                    glow: glow.get(&number).copied().unwrap_or(0.0),
-                                },
-                                flash,
-                                10.0,
-                                34.0,
-                            );
-                            if jump && Some(number) == entered {
-                                ui.scroll_to_rect(rect, Some(egui::Align::Center));
-                            } else if on_it {
-                                // No alignment: egui then scrolls the least
-                                // it can, which leaves the page still while
-                                // the head is somewhere a reader can see it.
-                                ui.scroll_to_rect(rect, None);
-                            }
-                        }
-                    });
+                    .auto_shrink([false, false]);
+                if let Some(line) = target {
+                    area = area.vertical_scroll_offset(follow_offset(
+                        line.saturating_sub(source.first),
+                        CODE_ROW,
+                        viewport,
+                    ));
+                }
+                let dedent = source.indent();
+                area.show(ui, |ui| {
+                    for (number, text, count) in source.walk(&hits) {
+                        let text = text.get(dedent.min(text.len())..).unwrap_or(text);
+                        code_line(
+                            ui,
+                            Shown {
+                                number,
+                                text,
+                                hits: count,
+                                glow: glow.get(&number).copied().unwrap_or(0.0),
+                            },
+                            flash,
+                            CODE_SIZE,
+                            34.0,
+                        );
+                    }
+                });
             },
         );
         self.put("code", slot);
@@ -3353,6 +3430,8 @@ struct Strip {
     /// How brightly each visible line is lit by the replay: 1.0 under the
     /// head, less for the few lines behind it, absent for the rest.
     glow: BTreeMap<usize, f32>,
+    /// Leading spaces every line of the function shares.
+    indent: usize,
 }
 
 /// How long a line stays lit after the tick that ran it, in seconds.
@@ -3400,6 +3479,22 @@ fn glow_of(steps: &[usize], head: usize) -> BTreeMap<usize, f32> {
     out
 }
 
+/// The text size of the wide code card, and the height of one of its
+/// lines. `code_line` allocates `size + 3` and the card sets no spacing
+/// between rows, so the two must change together.
+const CODE_SIZE: f32 = 10.0;
+const CODE_ROW: f32 = CODE_SIZE + 3.0;
+
+/// The scroll offset that puts row `row` in the middle of a viewport.
+///
+/// Plain arithmetic, because the rows are all one height and egui's own
+/// "scroll to this rectangle" measured it in the wrong space inside a
+/// zoomed scene. Never negative: the first rows sit at the top rather than
+/// in the middle of empty space above the function.
+fn follow_offset(row: usize, row_height: f32, viewport: f32) -> f32 {
+    (row as f32 * row_height + row_height / 2.0 - viewport / 2.0).max(0.0)
+}
+
 /// How fast the replay walks, in lines per second.
 ///
 /// Eight is about as fast as a line of code can be read as it goes past.
@@ -3426,6 +3521,9 @@ enum Quiet {
     /// As above, and the file on screen is the config file's guess rather
     /// than the running bot's own answer.
     OldBotGuessedFile,
+    /// The bot recorded the tick, and the tick stopped before this stage:
+    /// no signal means no gate, no approval means no order.
+    NotReached,
 }
 
 impl Quiet {
@@ -3434,6 +3532,7 @@ impl Quiet {
         match self {
             Quiet::NeverRan => "ยังไม่ได้รัน",
             Quiet::OldBot | Quiet::OldBotGuessedFile => "บอทยังไม่ได้จด",
+            Quiet::NotReached => "รอบนี้ไม่ได้มาถึง",
         }
     }
 
@@ -3441,11 +3540,13 @@ impl Quiet {
     fn long(self) -> &'static str {
         match self {
             Quiet::NeverRan => "นี่คือโค้ดที่ขั้นนี้ใช้ · รันบอทแล้วบรรทัดที่เดินจริงจะสว่างขึ้นมา",
-            Quiet::OldBot => {
-                "บอทที่รันอยู่ยังไม่ได้จดว่าเดินบรรทัดไหน · ปิดแล้วรันใหม่ บรรทัดจะสว่างขึ้นมาเอง"
-            }
+            Quiet::OldBot => "บอทที่รันอยู่ยังไม่ได้จดว่าเดินบรรทัดไหน · ปิดแล้วรันใหม่ บรรทัดจะสว่างขึ้นมาเอง",
             Quiet::OldBotGuessedFile => {
-                "บอทที่รันอยู่ยังไม่ได้บอกว่าใช้ไฟล์ไหน · ไฟล์นี้เดามาจากคอนฟิก                  อาจไม่ใช่กลยุทธ์ตัวจริง — ปิดแล้วรันบอทใหม่"
+                "บอทที่รันอยู่ยังไม่ได้บอกว่าใช้ไฟล์ไหน · ไฟล์นี้เดามาจากคอนฟิก อาจไม่ใช่กลยุทธ์ตัวจริง — ปิดแล้วรันบอทใหม่"
+            }
+            Quiet::NotReached => {
+                "tick ล่าสุดหยุดก่อนถึงขั้นนี้ · ดูการ์ดขั้นก่อนหน้าว่าหยุดที่บรรทัดไหน \
+                 หรือเลือก tick ที่ส่งออเดอร์มาเล่นซ้ำ"
             }
         }
     }
@@ -5473,6 +5574,33 @@ mod tests {
     }
 
     #[test]
+    fn a_broken_escape_is_kept_rather_than_eaten() {
+        assert_eq!(percent_decode("bot"), "bot");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(percent_decode("%E0%B8%9A"), "บ");
+    }
+
+    #[test]
+    fn a_link_can_open_the_board_on_any_zone_by_either_name() {
+        let mut board = Board::default();
+        assert!(board.open_at("bot"));
+        assert_eq!(board.looking_at(), Some(1));
+        assert!(board.open_at("#history"), "a URL fragment works as it is");
+        assert_eq!(board.looking_at(), Some(4));
+        assert!(board.open_at("บัญชีจริง"), "and so does the Thai label");
+        assert_eq!(board.looking_at(), Some(3));
+        assert!(
+            board.open_at("#%E0%B8%9A%E0%B8%AD%E0%B8%97"),
+            "the Thai label as a browser actually sends it"
+        );
+        assert_eq!(board.looking_at(), Some(1));
+        let before = board.scene_rect;
+        assert!(!board.open_at("nowhere"));
+        assert_eq!(board.scene_rect, before, "an unknown name changes nothing");
+    }
+
+    #[test]
     fn the_nav_bar_marks_the_zone_the_board_is_looking_at() {
         let mut board = Board::default();
         assert_eq!(board.looking_at(), Some(0), "เปิดมาที่โซนตลาด");
@@ -5482,5 +5610,93 @@ mod tests {
         // than the nearest one being lit wrongly.
         board.scene_rect = Rect::from_min_size(egui::pos2(9000.0, 9000.0), egui::vec2(10.0, 10.0));
         assert_eq!(board.looking_at(), None);
+    }
+
+    // ----------------------------------------- what the screenshot caught
+
+    #[test]
+    fn the_scroll_puts_the_head_in_the_middle_of_the_card() {
+        // Row 20 of 13-pixel rows in a 130-pixel viewport: the middle of the
+        // row sits at 266.5, so the view starts 65 above that.
+        assert_eq!(follow_offset(20, 13.0, 130.0), 266.5 - 65.0);
+    }
+
+    #[test]
+    fn the_first_rows_sit_at_the_top_rather_than_in_empty_space() {
+        assert_eq!(follow_offset(0, 13.0, 130.0), 0.0);
+        assert_eq!(follow_offset(3, 13.0, 130.0), 0.0);
+    }
+
+    /// A tick with no signal never reaches the gate. The gate card must say
+    /// that - "this tick stopped before here" - and not that the bot failed
+    /// to record anything, which is what it said when the screenshot was
+    /// taken.
+    #[test]
+    fn a_stage_the_tick_did_not_reach_says_so_rather_than_blaming_the_bot() {
+        let mut board = watching();
+        board.code.hold(
+            ("tradebot/risk.py".to_string(), 91),
+            code::Source {
+                file: "tradebot/risk.py".into(),
+                func: "risk_gate".into(),
+                first: 91,
+                lines: vec!["def risk_gate(signal):".into(), "    return None".into()],
+            },
+        );
+        board.code.hold_plan_from_bot(vec![
+            bot::Call::default(),
+            bot::Call::default(),
+            bot::Call {
+                file: "tradebot/risk.py".into(),
+                func: "risk_gate".into(),
+                line: 91,
+            },
+        ]);
+        let painted = painted_text(&mut board).join("\n");
+        assert!(painted.contains("รอบนี้ไม่ได้มาถึง"), "{painted}");
+        assert!(!painted.contains("บอทยังไม่ได้จด"), "บอทจดแล้ว · {painted}");
+    }
+
+    #[test]
+    fn the_send_order_card_never_shows_the_market_read_in_its_place() {
+        // A quiet tick touched the broker only to read the price. Showing
+        // that function under "send order" says the bot sent something.
+        let calls = vec![
+            bot::Call {
+                file: "tradebot/brokers/grvt.py".into(),
+                func: "fetch_mark_price".into(),
+                line: 375,
+            },
+            bot::Call {
+                file: "tradebot/core/engine.py".into(),
+                func: "tick".into(),
+                line: 227,
+            },
+        ];
+        let picked = code::candidates(3, &calls);
+        assert!(
+            picked.iter().all(|call| call.func != "fetch_mark_price"),
+            "{picked:?}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_card_drops_the_indentation_every_line_shares() {
+        let source = code::Source {
+            file: "x.py".into(),
+            func: "f".into(),
+            first: 1,
+            lines: vec![
+                "    def f(self):".into(),
+                "        if x:".into(),
+                "".into(),
+                "            return None".into(),
+            ],
+        };
+        assert_eq!(
+            source.indent(),
+            4,
+            "the def's own indent, blank lines ignored"
+        );
     }
 }

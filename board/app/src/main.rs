@@ -21,6 +21,11 @@ fn main() -> eframe::Result<()> {
             if let Some(saved) = board::store::load() {
                 board.restore(&saved);
             }
+            // `BOARD_VIEW=bot` opens straight on the pipeline: the quick
+            // way in for a screenshot, or for a lesson about one zone.
+            if let Ok(name) = std::env::var("BOARD_VIEW") {
+                board.open_at(&name);
+            }
             Ok(Box::new(board))
         }),
     )

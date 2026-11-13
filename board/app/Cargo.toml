@@ -55,6 +55,8 @@ web-sys = { version = "0.3", features = [
     "Window",
     # Where the layout is kept in the browser: see src/store.rs.
     "Storage",
+    # The #zone a link can open the board on: see Board::open_at.
+    "Location",
 ] }
 console_error_panic_hook = "0.1"
 

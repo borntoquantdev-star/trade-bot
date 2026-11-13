@@ -43,6 +43,14 @@ pub fn start() {
                     if let Some(saved) = crate::store::load() {
                         board.restore(&saved);
                     }
+                    // `/#bot` opens on the pipeline, `/#history` on the
+                    // runs - so a worksheet can link to the zone it means.
+                    let hash = web_sys::window()
+                        .and_then(|w| w.location().hash().ok())
+                        .unwrap_or_default();
+                    if !hash.is_empty() {
+                        board.open_at(&hash);
+                    }
                     Ok(Box::new(board))
                 }),
             )
