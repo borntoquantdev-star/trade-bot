@@ -150,6 +150,8 @@ pub struct Board {
     /// to keep honest. Pausing is therefore just freezing which clock
     /// reading they are all asked about.
     paused_at: Option<f64>,
+    /// Lines per second the walk moves at: one of `WALK_RATES`.
+    walk_rate: f64,
     /// The timestamp on the newest audit row, and when this board first saw
     /// it. A line that lit up a moment ago is drawn brighter for a moment,
     /// which is what makes a bot that is working *look* like one.
@@ -278,6 +280,7 @@ impl Default for Board {
             code_pick: 0,
             code_at: None,
             paused_at: None,
+            walk_rate: WALK_RATES[DEFAULT_RATE].0,
             replay: None,
             replay_order_on_load: false,
             run_note: None,
@@ -2006,7 +2009,25 @@ impl Board {
         }
         let at = self.paused_at.unwrap_or(now);
         let since = (at - self.seen_at).max(0.0);
-        ((since * WALK_RATE) as usize) % steps
+        ((since * self.walk_rate) as usize) % steps
+    }
+
+    /// Step to the next walking speed, keeping the head on the line it is on.
+    ///
+    /// The head is worked out from the clock, so changing the rate alone
+    /// would throw it to a different line. Moving the start of the clock by
+    /// the same proportion keeps it where it was: the walk carries on from
+    /// here at the new pace instead of jumping.
+    fn next_speed(&mut self, now: f64) {
+        let index = WALK_RATES
+            .iter()
+            .position(|(rate, _)| *rate == self.walk_rate)
+            .unwrap_or(DEFAULT_RATE);
+        let next = WALK_RATES[(index + 1) % WALK_RATES.len()].0;
+        let at = self.paused_at.unwrap_or(now);
+        let walked = (at - self.seen_at).max(0.0) * self.walk_rate;
+        self.seen_at = at - walked / next;
+        self.walk_rate = next;
     }
 
     /// Is any card walking? The board repaints faster while one is.
@@ -2283,8 +2304,11 @@ impl Board {
             .map(|stage| stage.label)
             .unwrap_or("");
         let title = match self.shown() {
+            // Short: in a replay the header also carries the buttons for
+            // the stage, the pause and the speed, and a long title pushes
+            // the last of them off the card.
             Some((_, row)) if self.replaying() => format!(
-                "โค้ดที่เดิน tick {} · {}. {}",
+                "tick {} · {}. {}",
                 bot::clock(&row.at),
                 self.code_stage + 1,
                 label
@@ -2305,6 +2329,8 @@ impl Board {
         // view back to the head would take that away.
         let follow = !paused;
         let mut toggle = false;
+        let mut faster = false;
+        let rate_now = self.walk_rate;
         let (state, status) = match (&source, ran) {
             (Some(source), true) => {
                 let (walked, total) = source.covered(&hits);
@@ -2376,9 +2402,6 @@ impl Board {
                         want_stage = Some(index);
                     }
                 }
-                // One stage can run several functions - a broker reads the
-                // price and the equity with two of them - so the card says
-                // which of them this is, and lets you step through.
                 // Stop the replay to read a branch, start it to watch
                 // the tick again. Not a mode: it changes nothing but the
                 // clock the head is asked about.
@@ -2401,7 +2424,30 @@ impl Board {
                     {
                         toggle = true;
                     }
+                    // How fast it walks: slow enough to talk over, fast
+                    // enough to see the shape of a tick at a glance.
+                    let speed = WALK_RATES
+                        .iter()
+                        .find(|(rate, _)| *rate == rate_now)
+                        .map(|(_, word)| *word)
+                        .unwrap_or("ปกติ");
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(speed).size(9.5).color(theme::DIM),
+                            )
+                            .fill(theme::HEAD)
+                            .small(),
+                        )
+                        .on_hover_text("ความเร็วที่หัวอ่านเดิน: ช้า / ปกติ / เร็ว")
+                        .clicked()
+                    {
+                        faster = true;
+                    }
                 }
+                // One stage can run several functions - a broker reads the
+                // price and the equity with two of them - so the card says
+                // which of them this is, and lets you step through.
                 if picks > 1 {
                     ui.add_space(6.0);
                     if ui
@@ -2503,6 +2549,9 @@ impl Board {
         );
         self.put("code", slot);
         self.code_at = here;
+        if faster {
+            self.next_speed(now);
+        }
         if toggle {
             self.paused_at = match self.paused_at {
                 Some(_) => None,
@@ -3909,11 +3958,19 @@ fn follow_offset(row: usize, row_height: f32, viewport: f32) -> f32 {
     (row as f32 * row_height + row_height / 2.0 - viewport / 2.0).max(0.0)
 }
 
-/// How fast the replay walks, in lines per second.
+/// The speeds the walk can go at, in lines per second, with the word on
+/// the button for each.
 ///
-/// Eight is about as fast as a line of code can be read as it goes past.
-/// Faster looks like a progress bar; slower looks broken.
-const WALK_RATE: f64 = 8.0;
+/// Eight is about as fast as a line can be read as it goes past; two is the
+/// pace of someone explaining each line aloud to a room, which is what a
+/// teacher at a projector is doing. Four sits between and is where it
+/// starts.
+const WALK_RATES: [(f64, &str); 3] = [(2.0, "ช้า"), (4.0, "ปกติ"), (8.0, "เร็ว")];
+const DEFAULT_RATE: usize = 1;
+
+/// The default pace, for the tests that count steps against the clock.
+#[cfg(test)]
+const WALK_RATE: f64 = WALK_RATES[DEFAULT_RATE].0;
 
 /// Said when the bot recorded a tick but this stage was not part of it.
 const NO_FILE: &str = "ยังไม่รู้ว่าขั้นนี้ใช้ไฟล์ไหน · ตรวจ BOARD_CODE กับ BOARD_CONFIG ของเซิร์ฟเวอร์";
@@ -6227,7 +6284,7 @@ mod tests {
         board.replay_at(board.last_order_tick());
         let painted = painted_text(&mut board).join("\n");
         assert!(
-            painted.contains("โค้ดที่เดิน tick 23:47:11"),
+            painted.contains("tick 23:47:11 · 2. กลยุทธ์"),
             "the code card names the tick, in Thai time · {painted}"
         );
     }
@@ -6435,5 +6492,36 @@ mod tests {
                 assert!(!ra.intersects(rb), "{a} ทับ {b}");
             }
         }
+    }
+
+    // -------------------------------------------------------------- speed
+
+    #[test]
+    fn the_walk_starts_at_a_pace_a_person_can_read() {
+        let board = Board::default();
+        assert_eq!(board.walk_rate, 4.0);
+    }
+
+    /// Changing speed must not throw the head to another line: a teacher
+    /// slows down to talk about the line on screen, not a different one.
+    #[test]
+    fn changing_speed_keeps_the_head_on_the_line_it_was_on() {
+        let mut board = watching();
+        board.mark_tick(0.0);
+        let now = 0.6; // 2.4 steps in at 4 a second: step 2
+        assert_eq!(board.head(now, 100), 2);
+        board.next_speed(now);
+        assert_eq!(board.walk_rate, 8.0);
+        assert_eq!(board.head(now, 100), 2, "same line, faster from here");
+        board.next_speed(now);
+        assert_eq!(board.walk_rate, 2.0, "and round to slow");
+        assert_eq!(board.head(now, 100), 2);
+    }
+
+    #[test]
+    fn the_speed_button_says_how_fast_it_is_going() {
+        let mut board = watching();
+        let painted = painted_text(&mut board).join("\n");
+        assert!(painted.contains("ปกติ"), "{painted}");
     }
 }
