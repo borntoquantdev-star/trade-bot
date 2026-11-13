@@ -128,6 +128,16 @@ pub struct Board {
     /// Which function the code card was showing last frame, so it can scroll
     /// to the code that ran when - and only when - that changes.
     code_at: Option<(String, usize)>,
+    /// The tick being replayed, by its timestamp, or `None` to follow the
+    /// newest one.
+    ///
+    /// By timestamp rather than by position: the trail is re-read every two
+    /// seconds and its first rows fall off the front, so a position would
+    /// quietly start pointing at a different tick. A timestamp is the tick.
+    replay: Option<String>,
+    /// Replay the newest order as soon as the trail arrives. Set by the
+    /// `order` link, which is asked for before there is a trail to look in.
+    replay_order_on_load: bool,
     /// When the walk was paused, if it is.
     ///
     /// The head's position is worked out from the clock rather than stored,
@@ -259,6 +269,8 @@ impl Default for Board {
             code_pick: 0,
             code_at: None,
             paused_at: None,
+            replay: None,
+            replay_order_on_load: false,
             seen_tick: String::new(),
             seen_at: 0.0,
             selected: BTreeSet::new(),
@@ -311,6 +323,14 @@ impl Board {
         // page as `#%E0%B8%9A...`; decoded here rather than in the browser
         // glue so the native tests can see it happen.
         let wanted = percent_decode(name.trim().trim_start_matches('#')).to_lowercase();
+        // `order` is a moment rather than a place: the pipeline, replaying
+        // the newest tick that sent an order. The one link a worksheet
+        // needs for "watch the bot place a trade".
+        if wanted == "order" || wanted == "ออเดอร์" {
+            self.scene_rect = view(1);
+            self.replay_order_on_load = true;
+            return true;
+        }
         let found = VIEWS
             .iter()
             .zip(VIEW_ALIASES)
@@ -450,6 +470,10 @@ impl eframe::App for Board {
         self.history.tick(now, &instrument, self.timeframe, 400);
         self.bot.poll(now);
         self.code.poll(now);
+        if self.replay_order_on_load && !self.bot.rows.is_empty() {
+            self.replay_order_on_load = false;
+            self.replay_at(self.last_order_tick());
+        }
         self.mark_tick(now);
         self.exchange.watch(&self.feed.instrument.clone());
         self.exchange.poll(now);
@@ -530,6 +554,26 @@ impl Board {
             // What the selection is for, only while there is one. A hint
             // that is always on screen is furniture; a hint that appears the
             // moment it applies is an answer.
+            // A replay is the one state of the board that makes every
+            // card lie about "now", so it is announced where "now" lives,
+            // with the way back next to it.
+            if self.replaying() {
+                if let Some((_, row)) = self.shown() {
+                    let at = bot::clock(&row.at);
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(format!("กำลังเล่นซ้ำ tick {at}"))
+                            .size(11.0)
+                            .color(theme::ACCENT),
+                    );
+                    if ui
+                        .button(egui::RichText::new("กลับไปล่าสุด").size(11.0))
+                        .clicked()
+                    {
+                        self.replay_at(None);
+                    }
+                }
+            }
             if !self.selected.is_empty() {
                 ui.add_space(10.0);
                 ui.label(
@@ -1661,7 +1705,7 @@ impl Board {
         let has = self.bot.has_live();
         let mut out: Vec<(&'static str, theme::State)> = Vec::with_capacity(7);
         for (index, id) in STAGES.iter().enumerate() {
-            let state = match self.bot.stages.get(index) {
+            let state = match self.stages_now().get(index) {
                 Some(stage) if has => stage.state,
                 _ => theme::State::Idle,
             };
@@ -1727,7 +1771,103 @@ impl Board {
     /// not have one. Every card that reads this must cope with that, because
     /// a student's first audit trail will often be one of those.
     fn trace(&self) -> Option<&bot::Trace> {
-        self.bot.rows.last().and_then(|row| row.trace.as_ref())
+        self.shown().and_then(|(_, row)| row.trace.as_ref())
+    }
+
+    /// The row the five cards are showing, and where it is in the trail:
+    /// the one being replayed if it is still in the trail, else the newest.
+    fn shown(&self) -> Option<(usize, &bot::Row)> {
+        if let Some(at) = &self.replay {
+            if let Some(index) = self.bot.rows.iter().rposition(|row| &row.at == at) {
+                return Some((index, &self.bot.rows[index]));
+            }
+        }
+        let index = self.bot.rows.len().checked_sub(1)?;
+        Some((index, &self.bot.rows[index]))
+    }
+
+    /// Is a past tick on the cards, rather than the newest?
+    fn replaying(&self) -> bool {
+        match (&self.replay, self.bot.rows.last()) {
+            (Some(at), Some(last)) => {
+                at != &last.at && self.bot.rows.iter().any(|row| &row.at == at)
+            }
+            _ => false,
+        }
+    }
+
+    /// The five stages as they stood on the tick being shown.
+    ///
+    /// Worked out from the trail up to and including that tick, so a
+    /// replayed order shows its signal, its approval and its receipt on the
+    /// cards that walk its code - not the verdicts of whatever tick came
+    /// last. The state file is the current one either way: it holds only the
+    /// halt flag and the day's figures, and has no history to rewind.
+    fn stages_now(&self) -> Vec<bot::Stage> {
+        match self.shown() {
+            Some((index, _)) if self.replaying() => {
+                bot::stages_of(&self.bot.rows[..=index], self.bot.state.as_ref())
+            }
+            _ => self.bot.stages.clone(),
+        }
+    }
+
+    /// Show a past tick, or the newest with `None`. Starts the walk again
+    /// from its first step, because a replay that opens halfway through is
+    /// a replay of half a tick.
+    fn replay_at(&mut self, at: Option<String>) {
+        let newest = self.bot.rows.last().map(|row| row.at.clone());
+        self.replay = match at {
+            Some(at) if Some(&at) == newest.as_ref() => None,
+            other => other,
+        };
+        self.paused_at = None;
+    }
+
+    /// The ticks a stepper walks through: the ones with a trace when there
+    /// are any, because stepping onto a tick with no code to show is a step
+    /// that shows nothing.
+    fn steppable(&self) -> Vec<usize> {
+        let traced: Vec<usize> = self
+            .bot
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.trace.is_some())
+            .map(|(index, _)| index)
+            .collect();
+        if traced.is_empty() {
+            (0..self.bot.rows.len()).collect()
+        } else {
+            traced
+        }
+    }
+
+    /// One tick back (`-1`) or forward (`+1`) from the one being shown.
+    fn step_tick(&mut self, direction: i32) {
+        let Some((here, _)) = self.shown() else {
+            return;
+        };
+        let ticks = self.steppable();
+        let next = if direction < 0 {
+            ticks.iter().rev().find(|index| **index < here)
+        } else {
+            ticks.iter().find(|index| **index > here)
+        };
+        if let Some(index) = next.copied() {
+            let at = self.bot.rows[index].at.clone();
+            self.replay_at(Some(at));
+        }
+    }
+
+    /// The newest tick that sent an order, preferring one with a trace so
+    /// there is code to watch it happen in.
+    fn last_order_tick(&self) -> Option<String> {
+        let orders = || self.bot.rows.iter().rev().filter(|row| row.order.is_some());
+        orders()
+            .find(|row| row.trace.is_some())
+            .or_else(|| orders().next())
+            .map(|row| row.at.clone())
     }
 
     /// The functions a stage card could show, best first, and whether the
@@ -1888,11 +2028,12 @@ impl Board {
     /// the two would mean trusting that two machines agree about the time,
     /// and all this needs to know is how long ago it saw the row change.
     fn mark_tick(&mut self, now: f64) {
+        // The tick on the cards, which is the newest unless one is being
+        // replayed: a fresh tick arriving mid-replay must not yank the head
+        // back to the start of the tick a person is watching.
         let latest = self
-            .bot
-            .rows
-            .last()
-            .map(|row| row.at.clone())
+            .shown()
+            .map(|(_, row)| row.at.clone())
             .unwrap_or_default();
         if latest != self.seen_tick {
             self.seen_tick = latest;
@@ -1925,7 +2066,7 @@ impl Board {
         let mut slot = self.slot(id);
         let mut picked = false;
         let has = self.bot.has_live();
-        let stage = self.bot.stages.get(index).cloned();
+        let stage = self.stages_now().get(index).cloned();
         let (label, sub, state, metric, detail) = match &stage {
             Some(stage) if has => (
                 stage.label,
@@ -2112,7 +2253,15 @@ impl Board {
             .get(self.code_stage)
             .map(|stage| stage.label)
             .unwrap_or("");
-        let title = format!("โค้ดที่เพิ่งเดิน · {}. {}", self.code_stage + 1, label);
+        let title = match self.shown() {
+            Some((_, row)) if self.replaying() => format!(
+                "โค้ดที่เดิน tick {} · {}. {}",
+                bot::clock(&row.at),
+                self.code_stage + 1,
+                label
+            ),
+            _ => format!("โค้ดที่เพิ่งเดิน · {}. {}", self.code_stage + 1, label),
+        };
         let walk = match (&call, &source, ran) {
             (Some(call), Some(source), true) => self.walk_of(call, source),
             _ => Walk::default(),
@@ -2486,12 +2635,64 @@ impl Board {
         };
         let status = format!("{} เรื่อง", log.len());
         let (state, status) = stale_if_failed(&load, state, status);
-        card::show(
+        let shown_at = self.shown().map(|(_, row)| row.at.clone());
+        let replaying = self.replaying();
+        let order_tick = self.last_order_tick();
+        // Two closures, two answers: the buttons in the header and the
+        // entries in the body are drawn by different closures, and each
+        // needs somewhere of its own to write which tick was chosen.
+        let mut pick: Option<Option<String>> = None;
+        let mut chosen: Option<String> = None;
+        let mut step = 0;
+        card::show_with_tools(
             ui,
             &mut slot,
             "สิ่งที่บอทตัดสินใจ",
             &status,
             state,
+            |ui| {
+                // The four ways to choose a tick, on the list of ticks: the
+                // newest, the newest that sent an order, and one either side
+                // of the tick on the cards now.
+                let small = |text: &str, lit: bool| {
+                    egui::Button::new(egui::RichText::new(text).size(9.5).color(if lit {
+                        theme::ACCENT
+                    } else {
+                        theme::DIM
+                    }))
+                    .fill(if lit {
+                        theme::ACCENT.gamma_multiply(0.16)
+                    } else {
+                        theme::HEAD
+                    })
+                    .small()
+                };
+                if ui.add(small("ล่าสุด", !replaying)).clicked() {
+                    pick = Some(None);
+                }
+                let can_order = order_tick.is_some();
+                if ui
+                    .add_enabled(can_order, small("ออเดอร์ล่าสุด", false))
+                    .on_hover_text("เล่นซ้ำ tick ล่าสุดที่บอทส่งออเดอร์")
+                    .clicked()
+                {
+                    pick = Some(order_tick.clone());
+                }
+                if ui
+                    .add(small("‹", false))
+                    .on_hover_text("tick ก่อนหน้า")
+                    .clicked()
+                {
+                    step = -1;
+                }
+                if ui
+                    .add(small("›", false))
+                    .on_hover_text("tick ถัดไป")
+                    .clicked()
+                {
+                    step = 1;
+                }
+            },
             |ui| {
                 if !has {
                     waiting(ui, &load, "tradebot --dry-run");
@@ -2517,25 +2718,61 @@ impl Board {
                             );
                         }
                         for entry in &log {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(bot::clock(&entry.at))
-                                        .size(10.0)
-                                        .monospace()
-                                        .color(theme::FAINT),
+                            // Each entry is a tick: press it and the five
+                            // cards replay that tick, the way an execution
+                            // opens in n8n.
+                            let on_it = shown_at.as_deref() == Some(entry.at.as_str());
+                            let response = ui
+                                .scope(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(bot::clock(&entry.at))
+                                                .size(10.0)
+                                                .monospace()
+                                                .color(if on_it {
+                                                    theme::ACCENT
+                                                } else {
+                                                    theme::FAINT
+                                                }),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(&entry.title)
+                                                .size(11.5)
+                                                .color(entry.kind.colour()),
+                                        );
+                                    });
+                                    if !entry.text.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(&entry.text)
+                                                .size(10.5)
+                                                .color(theme::MUTED),
+                                        );
+                                    }
+                                })
+                                .response;
+                            let area = response.rect.expand2(egui::vec2(4.0, 2.0));
+                            let click = ui.interact(
+                                area,
+                                ui.id().with(("log-entry", &entry.at)),
+                                Sense::click(),
+                            );
+                            if on_it {
+                                ui.painter().rect_stroke(
+                                    area,
+                                    3,
+                                    egui::Stroke::new(1.0, theme::ACCENT),
+                                    egui::StrokeKind::Inside,
                                 );
-                                ui.label(
-                                    egui::RichText::new(&entry.title)
-                                        .size(11.5)
-                                        .color(entry.kind.colour()),
+                            } else if click.hovered() {
+                                ui.painter().rect_filled(
+                                    area,
+                                    3,
+                                    theme::ACCENT.gamma_multiply(0.06),
                                 );
-                            });
-                            if !entry.text.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(&entry.text)
-                                        .size(10.5)
-                                        .color(theme::MUTED),
-                                );
+                            }
+                            if click.on_hover_text("กดเพื่อเล่นซ้ำ tick นี้").clicked()
+                            {
+                                chosen = Some(entry.at.clone());
                             }
                             ui.add_space(5.0);
                         }
@@ -2543,6 +2780,14 @@ impl Board {
             },
         );
         self.put("log", slot);
+        if let Some(at) = chosen {
+            self.replay_at(Some(at));
+        } else if let Some(at) = pick {
+            self.replay_at(at);
+        }
+        if step != 0 {
+            self.step_tick(step);
+        }
     }
 
     /// What a backtest earned, and whether doing nothing would have done
@@ -5717,5 +5962,143 @@ mod tests {
             4,
             "the def's own indent, blank lines ignored"
         );
+    }
+
+    // ------------------------------------------------------------ replay
+
+    /// A trail of three ticks: quiet, an order, quiet again. The newest is
+    /// quiet, which is exactly why the order could never be seen.
+    fn three_ticks() -> Board {
+        let mut board = Board::default();
+        let quiet = |at: &str| bot::Row {
+            at: at.to_string(),
+            symbol: "BTC_USDT_Perp".into(),
+            price: "100000".into(),
+            equity: "9966.40".into(),
+            trace: traced_row().trace,
+            ..Default::default()
+        };
+        let mut order = quiet("2026-11-13T16:47:11+00:00");
+        order.signal = Some(bot::Signal {
+            side: "buy".into(),
+            ref_price: "68621.4".into(),
+            stop_price: "68278.6".into(),
+            reason: "below the average".into(),
+        });
+        order.order = Some(bot::Order {
+            side: "buy".into(),
+            qty: "0.145".into(),
+            limit_price: "68621.4".into(),
+            risk_amount: "49.68".into(),
+            ..Default::default()
+        });
+        board.bot.rows = vec![
+            quiet("2026-11-13T16:47:06+00:00"),
+            order,
+            quiet("2026-11-13T16:47:16+00:00"),
+        ];
+        board.bot.stages = bot::stages_of(&board.bot.rows, None);
+        board
+    }
+
+    #[test]
+    fn the_cards_follow_the_newest_tick_until_told_otherwise() {
+        let board = three_ticks();
+        assert!(!board.replaying());
+        assert_eq!(board.shown().unwrap().0, 2);
+    }
+
+    /// The thing that was missing: the order tick, on the cards.
+    #[test]
+    fn the_newest_order_can_be_put_back_on_the_cards() {
+        let mut board = three_ticks();
+        let at = board
+            .last_order_tick()
+            .expect("there is an order in the trail");
+        board.replay_at(Some(at));
+        assert!(board.replaying());
+        assert_eq!(board.shown().unwrap().0, 1);
+        let stages = board.stages_now();
+        assert_eq!(
+            stages[1].metric, "buy",
+            "the strategy card shows the signal"
+        );
+        assert_eq!(
+            stages[2].metric, "0.145",
+            "the gate card shows the approval"
+        );
+    }
+
+    #[test]
+    fn a_replay_says_so_where_the_time_is_shown() {
+        let mut board = three_ticks();
+        board.replay_at(board.last_order_tick());
+        let painted = painted_text(&mut board).join("\n");
+        assert!(
+            painted.contains("โค้ดที่เดิน tick 23:47:11"),
+            "the code card names the tick, in Thai time · {painted}"
+        );
+    }
+
+    #[test]
+    fn stepping_walks_one_tick_at_a_time_and_stops_at_the_ends() {
+        let mut board = three_ticks();
+        board.step_tick(-1);
+        assert_eq!(board.shown().unwrap().0, 1);
+        board.step_tick(-1);
+        assert_eq!(board.shown().unwrap().0, 0);
+        board.step_tick(-1);
+        assert_eq!(board.shown().unwrap().0, 0, "nothing before the first");
+        board.step_tick(1);
+        board.step_tick(1);
+        assert!(
+            !board.replaying(),
+            "stepping onto the newest is following again"
+        );
+    }
+
+    /// The trail is re-read every two seconds and grows. A replay is a
+    /// tick, so a new tick arriving must not move it - nor restart its walk.
+    #[test]
+    fn a_new_tick_arriving_does_not_move_a_replay() {
+        let mut board = three_ticks();
+        board.replay_at(board.last_order_tick());
+        board.mark_tick(10.0);
+        let mut fresh = board.bot.rows[2].clone();
+        fresh.at = "2026-11-13T16:47:21+00:00".into();
+        board.bot.rows.push(fresh);
+        board.mark_tick(11.0);
+        assert_eq!(board.shown().unwrap().0, 1, "still the order tick");
+        assert_eq!(board.seen_at, 10.0, "and the walk was not restarted");
+    }
+
+    /// A replayed tick that has fallen off the front of the trail is gone;
+    /// the cards go back to the newest rather than showing nothing.
+    #[test]
+    fn a_replay_of_a_tick_no_longer_in_the_trail_falls_back_to_the_newest() {
+        let mut board = three_ticks();
+        board.replay_at(Some("2026-11-01T00:00:00+00:00".into()));
+        assert!(!board.replaying());
+        assert_eq!(board.shown().unwrap().0, 2);
+    }
+
+    #[test]
+    fn the_order_link_opens_the_pipeline_on_the_newest_order() {
+        let mut board = three_ticks();
+        assert!(board.open_at("#order"));
+        assert_eq!(board.looking_at(), Some(1), "the pipeline zone");
+        assert!(board.replay_order_on_load, "waiting for the trail");
+        // What `ui` does once the trail has arrived.
+        board.replay_order_on_load = false;
+        board.replay_at(board.last_order_tick());
+        assert_eq!(board.shown().unwrap().0, 1, "the order tick");
+    }
+
+    #[test]
+    fn choosing_the_newest_tick_is_the_same_as_following() {
+        let mut board = three_ticks();
+        let newest = board.bot.rows[2].at.clone();
+        board.replay_at(Some(newest));
+        assert_eq!(board.replay, None);
     }
 }
