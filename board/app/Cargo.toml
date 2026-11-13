@@ -58,6 +58,9 @@ web-sys = { version = "0.3", features = [
     # The #zone a link can open the board on: see Board::open_at.
     "Location",
 ] }
+# The wall clock in the top bar: see src/time.rs. Already in the tree
+# under web-sys; named here so the board can call it.
+js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
 [[example]]

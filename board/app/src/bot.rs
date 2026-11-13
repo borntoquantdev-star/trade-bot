@@ -322,14 +322,12 @@ fn uint_json(value: Option<&serde_json::Value>) -> u64 {
     maybe_json(value).map(|v| v.max(0.0) as u64).unwrap_or(0)
 }
 
-/// The clock part of an ISO timestamp, which is all a row on screen has room
-/// for. Returns the whole string if it does not look like one, rather than
-/// cutting a sentence in half.
+/// The clock part of an ISO timestamp, in Thai time, which is all a row on
+/// screen has room for. Returns the whole string if it does not look like
+/// one, rather than cutting a sentence in half. See `time.rs` for why the
+/// board converts at all.
 pub fn clock(at: &str) -> String {
-    match at.split_once('T') {
-        Some((_, rest)) if rest.len() >= 8 => rest[..8].to_owned(),
-        _ => at.to_owned(),
-    }
+    crate::time::clock(at)
 }
 
 // ------------------------------------------------------------------- derive
@@ -1319,7 +1317,11 @@ mod tests {
 
     #[test]
     fn the_clock_is_cut_out_of_a_timestamp_without_mangling_other_text() {
-        assert_eq!(clock("2026-11-04T10:42:05.618914+00:00"), "10:42:05");
+        assert_eq!(
+            clock("2026-11-04T10:42:05.618914+00:00"),
+            "17:42:05",
+            "UTC in, Thai time out"
+        );
         assert_eq!(clock("ไม่มีเวลา"), "ไม่มีเวลา");
         assert_eq!(clock(""), "");
     }

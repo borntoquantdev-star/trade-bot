@@ -37,6 +37,10 @@ pub struct Config {
     /// Where the bot's own source lives, so the stage cards can show the
     /// function that ran. Read only, `.py` only, and never written to.
     pub code: PathBuf,
+    /// Hours east of UTC that a calendar day starts at. Thailand, +7, by
+    /// default: a day that began at midnight UTC would begin at seven in the
+    /// morning for everyone reading this board.
+    pub utc_offset_hours: i64,
     /// The bot's config file, relative to `code`. Read for two strings: the
     /// exchange and the strategy, which is what lets the cards show the
     /// right code before the bot has ever run.
@@ -86,6 +90,10 @@ async fn main() -> anyhow::Result<()> {
         candles: candle_root.clone(),
         code: code_root.clone(),
         config_file: config_file.clone(),
+        utc_offset_hours: std::env::var("BOARD_UTC_OFFSET")
+            .ok()
+            .and_then(|hours| hours.trim().parse().ok())
+            .unwrap_or(7),
         market_data_rest: market_data_rest.clone(),
         http: reqwest::Client::builder()
             .user_agent("tradebot-board")

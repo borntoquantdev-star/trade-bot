@@ -47,7 +47,7 @@ pub async fn days(State(config): State<Config>) -> Json<Value> {
             "reason": format!("ยังไม่มี {}", path.display()),
         }));
     };
-    Json(collect_days(&text))
+    Json(collect_days(&text, config.utc_offset_hours))
 }
 
 /// Pair the start and end lines, newest first.
@@ -142,8 +142,9 @@ fn change_of(run: &Map<String, Value>) -> Option<f64> {
     Some(last - first)
 }
 
-/// One entry per calendar day, oldest first.
-pub fn collect_days(text: &str) -> Value {
+/// One entry per calendar day, oldest first, in the timezone `offset`
+/// hours east of UTC.
+pub fn collect_days(text: &str, offset: i64) -> Value {
     let mut order: Vec<String> = Vec::new();
     let mut days: std::collections::BTreeMap<String, Day> = Default::default();
 
@@ -154,10 +155,11 @@ pub fn collect_days(text: &str) -> Value {
         let Some(at) = row.get("at").and_then(|at| at.as_str()) else {
             continue;
         };
-        // The date the bot wrote, not a date worked out from a timestamp:
-        // parsing it would mean choosing a timezone, and the only honest
-        // choice is the one already in the string.
-        let Some(date) = at.get(..10).map(String::from) else {
+        // The date in the reader's timezone, not the one in the string: the
+        // bot writes UTC, and in Bangkok a UTC day ends at seven in the
+        // morning - so a calendar of UTC days puts every evening's trading
+        // on the wrong square.
+        let Some(date) = local_date(at, offset) else {
             continue;
         };
         let day = days.entry(date.clone()).or_insert_with(|| {
@@ -217,6 +219,71 @@ pub fn collect_days(text: &str) -> Value {
         "days": out,
         "total": total,
     })
+}
+
+/// `2026-11-13T17:05:00+00:00` -> `2026-11-14` for an offset of +7.
+///
+/// Reads the timestamp's own offset (`Z`, `+00:00`, `+0000` or none, which
+/// this project's writers only ever mean as UTC) and moves it `offset`
+/// hours east. `None` for anything that is not a timestamp.
+pub fn local_date(at: &str, offset: i64) -> Option<String> {
+    let (date, rest) = at.trim().split_once('T')?;
+    let mut parts = date.split('-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = parts.next()?.parse().ok()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let (clock, written) = match rest.strip_suffix('Z') {
+        Some(clock) => (clock, 0),
+        None => match rest.rfind(['+', '-']) {
+            Some(at) => {
+                let (clock, sign_and_digits) = rest.split_at(at);
+                let sign = if sign_and_digits.starts_with('-') {
+                    -1
+                } else {
+                    1
+                };
+                let digits = sign_and_digits[1..].replace(':', "");
+                let hours: i64 = digits.get(..2)?.parse().ok()?;
+                let minutes: i64 = digits.get(2..4).unwrap_or("00").parse().ok()?;
+                (clock, sign * (hours * 60 + minutes))
+            }
+            None => (rest, 0),
+        },
+    };
+    let mut clock_parts = clock.split(':');
+    let hour: i64 = clock_parts.next()?.parse().ok()?;
+    let minute: i64 = clock_parts.next()?.parse().ok()?;
+    let minutes =
+        days_from_civil(year, month, day) * 1440 + hour * 60 + minute - written + offset * 60;
+    let (y, m, d) = civil_from_days(minutes.div_euclid(1440));
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// Days since 1970-01-01. Howard Hinnant's algorithm, the same one the
+/// board's `time.rs` uses, so the two can never disagree about a date.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if month <= 2 { y + 1 } else { y }, month, day)
 }
 
 #[derive(Default)]
@@ -312,7 +379,7 @@ mod tests {
 
     #[test]
     fn a_day_is_counted_from_the_date_the_bot_wrote() {
-        let value = collect_days(TRAIL);
+        let value = collect_days(TRAIL, 0);
         let days = value["days"].as_array().unwrap();
         assert_eq!(days.len(), 2);
         assert_eq!(days[0]["date"], "2026-11-12");
@@ -321,7 +388,7 @@ mod tests {
 
     #[test]
     fn a_day_counts_what_the_bot_did_that_day() {
-        let value = collect_days(TRAIL);
+        let value = collect_days(TRAIL, 0);
         let second = &value["days"][1];
         assert_eq!(second["ticks"], 3);
         assert_eq!(second["exits"], 1);
@@ -333,7 +400,7 @@ mod tests {
     /// in would draw the day as a total loss.
     #[test]
     fn an_unreadable_equity_does_not_become_the_end_of_the_day() {
-        let value = collect_days(TRAIL);
+        let value = collect_days(TRAIL, 0);
         let second = &value["days"][1];
         assert_eq!(second["first_equity"], "9966.40");
         assert_eq!(second["last_equity"], "9957.44");
@@ -343,8 +410,69 @@ mod tests {
 
     #[test]
     fn a_day_with_no_usable_equity_has_no_change_rather_than_a_zero_one() {
-        let value = collect_days("{\"at\":\"2026-11-13T09:00:00+00:00\",\"equity\":\"0\"}");
+        let value = collect_days("{\"at\":\"2026-11-13T09:00:00+00:00\",\"equity\":\"0\"}", 0);
         assert!(value["days"][0]["change"].is_null(), "วัดไม่ได้ ไม่ใช่ศูนย์");
         assert_eq!(value["days"][0]["ticks"], 1);
+    }
+
+    // ------------------------------------------------------ Thai days
+
+    /// Five past five in the evening UTC is five past midnight in Bangkok.
+    /// A calendar of UTC days would put that trade on yesterday's square.
+    #[test]
+    fn an_evening_trade_in_utc_lands_on_tomorrow_s_square_in_thailand() {
+        let trail = "{\"at\":\"2026-11-13T16:00:00+00:00\",\"equity\":\"100\"}
+                     {\"at\":\"2026-11-13T17:05:00+00:00\",\"equity\":\"101\"}
+";
+        let thai = collect_days(trail, 7);
+        let dates: Vec<&str> = thai["days"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|day| day["date"].as_str().unwrap())
+            .collect();
+        assert_eq!(dates, vec!["2026-11-13", "2026-11-14"]);
+        let utc = collect_days(trail, 0);
+        assert_eq!(
+            utc["days"].as_array().unwrap().len(),
+            1,
+            "ใน UTC เป็นวันเดียวกัน"
+        );
+    }
+
+    #[test]
+    fn every_offset_spelling_reaches_the_same_thai_date() {
+        for at in [
+            "2026-11-13T17:05:00Z",
+            "2026-11-13T17:05:00+00:00",
+            "2026-11-13T17:05:00.123456+00:00",
+            "2026-11-13T17:05:00",
+            "2026-11-14T00:05:00+07:00",
+            "2026-11-13T12:05:00-05:00",
+        ] {
+            assert_eq!(local_date(at, 7).as_deref(), Some("2026-11-14"), "{at}");
+        }
+    }
+
+    #[test]
+    fn months_and_years_roll_over_with_the_offset() {
+        assert_eq!(
+            local_date("2026-11-30T20:00:00Z", 7).as_deref(),
+            Some("2026-12-01")
+        );
+        assert_eq!(
+            local_date("2026-12-31T23:00:00Z", 7).as_deref(),
+            Some("2027-01-01")
+        );
+        assert_eq!(
+            local_date("2028-02-28T20:00:00Z", 7).as_deref(),
+            Some("2028-02-29")
+        );
+    }
+
+    #[test]
+    fn a_timestamp_that_is_not_one_has_no_date() {
+        assert_eq!(local_date("nonsense", 7), None);
+        assert_eq!(local_date("2026-13-01T00:00:00Z", 7), None);
     }
 }

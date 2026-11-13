@@ -586,7 +586,7 @@ mod tests {
         let balance = read_balance(&summary());
         assert_eq!(balance.equity.as_ref().unwrap().text, "9966.404007");
         assert_eq!(balance.currency, "USDT");
-        assert_eq!(balance.at, "09:54:11");
+        assert_eq!(balance.at, "16:54:11", "เวลาไทย = UTC+7");
     }
 
     #[test]
@@ -635,7 +635,7 @@ mod tests {
         assert_eq!(order.price.as_ref().unwrap().text, "68769.2");
         assert_eq!(order.filled.as_ref().unwrap().text, "0.145");
         assert_eq!(order.status, "FILLED");
-        assert_eq!(order.at, "08:59:45");
+        assert_eq!(order.at, "15:59:45", "เวลาไทย = UTC+7");
         assert_eq!(order.done(), Some(1.0));
     }
 
@@ -668,7 +668,7 @@ mod tests {
         assert_eq!(fill.fee.as_ref().unwrap().text, "4.491594");
         assert_eq!(fill.fee_rate.as_ref().unwrap().value, 0.045);
         assert!(fill.is_taker);
-        assert_eq!(fill.at, "09:03:06");
+        assert_eq!(fill.at, "16:03:06", "เวลาไทย = UTC+7");
     }
 
     #[test]
@@ -689,7 +689,7 @@ mod tests {
         let closed = &rows[0];
         assert!(!closed.is_long);
         assert_eq!(closed.after_costs(), Some(-17.7915));
-        assert_eq!(closed.opened_at, "09:00:50");
+        assert_eq!(closed.opened_at, "16:00:50", "เวลาไทย = UTC+7");
         // Fees were half the loss: the lesson the demo strategy exists to teach.
         let share = closed.fee_share().unwrap();
         assert!((share - 0.5046).abs() < 0.001, "{share}");

@@ -545,6 +545,17 @@ impl Board {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (colour, text) = connection(self.feed.health(now));
                 ui.label(egui::RichText::new(text).size(11.5).color(colour));
+                // The clock every time on the board is read against, and the
+                // name of the zone it is in: a column of times means nothing
+                // until you know whose times they are.
+                if let Some(wall) = crate::time::now_local() {
+                    ui.label(
+                        egui::RichText::new(format!("{} {}", crate::time::ZONE, wall.clock()))
+                            .size(11.5)
+                            .monospace()
+                            .color(theme::MUTED),
+                    );
+                }
                 ui.label(
                     egui::RichText::new(self.feed.env.label())
                         .size(11.5)
@@ -1472,7 +1483,11 @@ impl Board {
         } else if account.day.is_empty() {
             "มีข้อมูล".to_string()
         } else {
-            account.day.clone()
+            // The bot's trading day, which is a UTC day: its loss limit
+            // resets at midnight UTC, seven in the morning in Bangkok. Said
+            // on the chip because "today" on this card and "today" on the
+            // calendar are different days for seven hours of every day.
+            format!("วันของบอท {}", account.day)
         };
         let (state, status) = stale_if_failed(&load, state, status);
         // The exchange figure, when the server has a key. It leads the card
@@ -1547,7 +1562,7 @@ impl Board {
                 }
                 card::kv(
                     ui,
-                    "กำไรขาดทุนวันนี้",
+                    &format!("กำไรขาดทุนวันนี้ (นับจาก {:02}:00)", crate::time::OFFSET_HOURS),
                     &format!(
                         "{} ({})",
                         bot::signed(account.day_pnl),
@@ -1577,8 +1592,9 @@ impl Board {
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(format!(
-                            "บรรทัดล่าสุด {}",
-                            bot::clock(&account.updated_at)
+                            "บรรทัดล่าสุด {} {}",
+                            bot::clock(&account.updated_at),
+                            crate::time::ZONE
                         ))
                         .size(10.0)
                         .color(theme::FAINT),
@@ -4361,7 +4377,10 @@ mod tests {
         let painted = painted_text(&mut board).join(" | ");
         assert!(painted.contains("4.491594"), "{painted}");
         assert!(painted.contains("0.045"), "{painted}");
-        assert!(painted.contains("09:03:06"), "{painted}");
+        assert!(
+            painted.contains("16:03:06"),
+            "เวลาไทยของ 09:03:06Z · {painted}"
+        );
     }
 
     /// Run frames with pointer events in them, as a mouse would send.
@@ -5495,7 +5514,7 @@ mod tests {
         let mut board = Board::default();
         board.past.runs = vec![a_run()];
         let painted = painted_text(&mut board).join("\n");
-        assert!(painted.contains("16:47"), "{painted}");
+        assert!(painted.contains("23:47"), "เวลาไทยของ 16:47Z · {painted}");
         assert!(painted.contains("61 วิ"), "{painted}");
         assert!(painted.contains("ping_pong · grvt testnet"), "{painted}");
         assert!(painted.contains("10 รอบ · 1 ออเดอร์ · -8.96"), "{painted}");

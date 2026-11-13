@@ -21,6 +21,7 @@ pub mod history;
 pub mod market;
 pub mod store;
 pub mod theme;
+pub mod time;
 pub mod wire;
 pub mod zoom;
 

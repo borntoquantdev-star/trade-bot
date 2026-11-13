@@ -58,14 +58,14 @@ pub struct Run {
 }
 
 impl Run {
-    /// `16:47` out of an ISO timestamp, or an empty string.
-    pub fn clock(at: &str) -> &str {
-        at.get(11..16).unwrap_or("")
+    /// `23:47` in Thai time out of an ISO timestamp, or an empty string.
+    pub fn clock(at: &str) -> String {
+        crate::time::hhmm(at)
     }
 
-    /// `13 พ.ย.`-ish: the date part, for a run that did not start today.
-    pub fn day(&self) -> &str {
-        self.started_at.get(..10).unwrap_or("")
+    /// The Thai date the run started on.
+    pub fn day(&self) -> String {
+        crate::time::date(&self.started_at)
     }
 
     /// How long it ran, in whole seconds, when both ends are known.
@@ -329,7 +329,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(run.seconds(), Some(61));
-        assert_eq!(Run::clock(&run.started_at), "16:47");
+        assert_eq!(Run::clock(&run.started_at), "23:47", "เวลาไทย");
     }
 
     /// Clock arithmetic cannot see a date change, so it says so instead of
