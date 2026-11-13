@@ -292,3 +292,26 @@ def test_nothing_is_recorded_when_it_is_switched_off(tmp_path):
     bot.tick()
     assert "trace" not in rows(tmp_path)[-1]
     assert sys.gettrace() is None
+
+
+def test_flattening_with_nothing_open_writes_nothing(tmp_path):
+    bot = engine(tmp_path, trace=True)
+    bot.start()
+    assert bot.flatten("end") is None
+    assert not (tmp_path / "audit.jsonl").exists() or not rows(tmp_path)
+
+
+@taken
+def test_the_closing_row_carries_its_own_trace_not_the_last_tick_s(tmp_path):
+    """A stale trace on the closing row would show the board the code of the
+    tick before it, walking through a decision that was not this one."""
+    bot = engine(tmp_path, trace=True)
+    bot.start()
+    bot.tick()  # random with signal_chance=1.0 opens here
+    result = bot.flatten("end")
+    assert result is not None
+    last = rows(tmp_path)[-1]
+    assert last["exit"]["reason"] == "end"
+    funcs = {call["func"] for call in last["trace"]["calls"]}
+    assert "flatten" in funcs
+    assert "get_signal" not in funcs, "not the trace of the tick before"

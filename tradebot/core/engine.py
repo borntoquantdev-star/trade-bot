@@ -418,6 +418,44 @@ class Engine:
             self.strategy.cleanup()
             self.state.save(self.state_path)
 
+    def flatten(self, reason: str) -> TickResult | None:
+        """Close the configured symbol's position, if there is one.
+
+        For the end of a run that was told to stop after N iterations: a
+        bot that stops while holding leaves the position for nobody to look
+        after, and on a live account that is the one thing a demo must never
+        do.  It goes through the same ``_close`` as a strategy's own exit, so
+        the audit trail shows the close and why, and it never passes the risk
+        gate - closing reduces risk, which is not what the gate approves.
+
+        Returns ``None`` when there was nothing to close or the account
+        could not be read, which is said in the log either way.
+        """
+        symbol = self.config.trading.symbol
+        with Trace(enabled=self.trace_enabled) as self._trace:
+            try:
+                positions = dict(self.broker.fetch_positions())
+                position = positions.get(symbol)
+                if position is None:
+                    self._trace.stop()
+                    self.log.info("nothing open on %s at the end of the run", symbol)
+                    return None
+                price = self.broker.fetch_mark_price(symbol)
+                equity = self.broker.fetch_equity()
+            except BrokerError as exc:
+                self._trace.stop()
+                self.log.error("could not read the account to close at the end: %s", exc)
+                return None
+            market = MarketView(
+                symbol=symbol,
+                price=price,
+                now=self.clock(),
+                equity=equity,
+                position=position,
+                recent_prices=tuple(self.prices),
+            )
+            return self._close(market, reason)
+
     # --- helpers ---------------------------------------------------------
 
     def halt(self, reason: str) -> None:

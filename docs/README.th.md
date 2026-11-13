@@ -198,6 +198,8 @@ tradebot --live
 | `tradebot --resume` | ปลดล็อกสถานะ halt ที่ risk gate เขียนไว้ |
 | `tradebot --close --yes` | ปิด position ของ symbol ที่ตั้งไว้ |
 | `tradebot --iterations N` | หยุดหลังวน N รอบ |
+| `tradebot --iterations N --close-at-end` | หยุดหลังวน N รอบ **แล้วปิดไม้ที่ค้างอยู่** รอบสาธิตจะได้ไม่ทิ้งไม้ไว้ข้ามคืน |
+| `tradebot --no-trace` | ไม่จดว่าแต่ละ tick เดินบรรทัดไหน (บอร์ดจะไม่มีโค้ดให้เดิน) |
 | `tradebot --log-level DEBUG` | เวลาอยากดูละเอียด |
 | `tradebot --dry-run --paper-walk` | เทรดกระดาษแบบราคาขยับจริง |
 | `node dashboard/server.js --open` | เปิด dashboard ดูการทำงาน (อ่านอย่างเดียว) |

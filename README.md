@@ -230,6 +230,8 @@ it the bot refuses to start and sends nothing.
 | `tradebot --resume` | Clear a halt the risk gate wrote. |
 | `tradebot --close --yes` | Flatten the configured symbol. |
 | `tradebot --iterations N` | Stop after N loops. |
+| `tradebot --iterations N --close-at-end` | Stop after N loops and close any open position, so a demo run never leaves one behind. |
+| `tradebot --no-trace` | Do not record which lines each tick ran (the board then has no code to walk). |
 | `tradebot --log-level DEBUG` | When something is not behaving. |
 | `tradebot --dry-run --paper-walk` | Paper trade with a price that actually moves. |
 | `node dashboard/server.js --open` | The live dashboard (read-only). |

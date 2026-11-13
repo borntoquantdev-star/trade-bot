@@ -6,6 +6,7 @@ did it do, and did it finish or was it killed.
 """
 
 import json
+import random
 from decimal import Decimal
 from pathlib import Path
 
@@ -170,3 +171,61 @@ def test_a_real_run_brackets_itself(tmp_path):
     assert rows[1]["ticks"] == 2, "two iterations, two ticks"
     assert rows[1]["reason"] == "finished"
     assert rows[1]["first_equity"], "the run knows what it started with"
+
+
+# --- --close-at-end -----------------------------------------------------------
+
+
+def run_with(tmp_path, *extra):
+    config = tmp_path / "config.yaml"
+    config.write_text(CONFIG, encoding="utf-8")
+    return main(
+        [
+            "--config",
+            str(config),
+            "--log-file",
+            str(tmp_path / "bot.log"),
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--audit-file",
+            str(tmp_path / "audit.jsonl"),
+            "--runs-file",
+            str(tmp_path / "runs.jsonl"),
+            *extra,
+        ]
+    )
+
+
+def always_buy(monkeypatch):
+    """Make the coin-flip strategy buy on its first look.
+
+    It rolls `random.Random().random()` and buys under 0.3; left alone, two
+    ticks miss a signal one time in six, which is a test that fails at
+    random rather than a test of anything.
+    """
+    monkeypatch.setattr(random.Random, "random", lambda self: 0.1)
+
+
+def test_a_run_told_to_close_at_the_end_leaves_nothing_open(tmp_path, monkeypatch):
+    """The strategy opens on the first tick; the run then stops and must not
+    leave that position behind."""
+    always_buy(monkeypatch)
+    code = run_with(tmp_path, "--iterations", "2", "--strategy", "random", "--close-at-end")
+    assert code == 0
+    audit = lines(tmp_path / "audit.jsonl")
+    assert any("order" in row for row in audit), "the run did open something"
+    last = audit[-1]
+    assert last.get("exit", {}).get("reason") == "run ended (--close-at-end)"
+    end = lines(tmp_path / "runs.jsonl")[-1]
+    assert end["reason"] == "finished and closed the position"
+    assert end["exits"] >= 1
+
+
+def test_without_the_flag_the_position_is_left_as_it_was(tmp_path, monkeypatch):
+    """Unchanged behaviour unless asked: some lessons want to look at the
+    open position afterwards."""
+    always_buy(monkeypatch)
+    run_with(tmp_path, "--iterations", "2", "--strategy", "random")
+    audit = lines(tmp_path / "audit.jsonl")
+    assert any("order" in row for row in audit), "there was something to leave open"
+    assert not any(row.get("exit", {}).get("reason", "").startswith("run ended") for row in audit)

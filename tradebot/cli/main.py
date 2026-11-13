@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--iterations", type=int, default=None, help="stop after N loops (default: run forever)"
     )
     parser.add_argument(
+        "--close-at-end",
+        action="store_true",
+        help="close the position when the run stops (after --iterations, or Ctrl+C)",
+    )
+    parser.add_argument(
         "--runs-file",
         default="logs/runs.jsonl",
         help="one line when a run starts and one when it ends",
@@ -327,6 +332,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         code = engine.run(max_iterations=args.iterations)
         reason = "halted" if engine.state.halted else "finished"
+        # Asked for up front, when the run was started, rather than with a
+        # --yes at the end: the person chose this run and its ending in the
+        # same command. Only on a normal return - after an exception the
+        # broker's state is exactly what is in doubt.
+        if args.close_at_end:
+            closed = engine.flatten("run ended (--close-at-end)")
+            if closed is not None:
+                reason += " and closed the position"
         return code
     except BaseException as exc:  # including KeyboardInterrupt
         reason = f"{type(exc).__name__}: {exc}"
