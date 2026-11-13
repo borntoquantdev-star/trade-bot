@@ -2951,7 +2951,7 @@ impl Board {
                             let area = response.rect.expand2(egui::vec2(4.0, 2.0));
                             let click = ui.interact(
                                 area,
-                                ui.id().with(("log-entry", &entry.at)),
+                                ui.scope_id().with(("log-entry", &entry.at)),
                                 Sense::click(),
                             );
                             if on_it {
@@ -3837,37 +3837,6 @@ fn waiting(ui: &mut egui::Ui, load: &Load, command: &str) {
                 .color(theme::ACCENT),
         );
     }
-}
-
-/// One stage of the pipeline: a dot in its own state's colour, what it is,
-/// and what it last did.
-fn stage_row(ui: &mut egui::Ui, number: usize, stage: &bot::Stage) {
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), Sense::hover());
-        ui.painter()
-            .circle_filled(rect.center(), 3.5, stage.state.colour());
-        ui.label(
-            egui::RichText::new(format!("{number}. {}", stage.label))
-                .size(11.5)
-                .color(theme::TEXT),
-        );
-        if !stage.metric.is_empty() {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(&stage.metric)
-                        .size(10.5)
-                        .monospace()
-                        .color(stage.state.colour()),
-                );
-            });
-        }
-    });
-    ui.label(
-        egui::RichText::new(&stage.detail)
-            .size(10.5)
-            .color(theme::DIM),
-    );
-    ui.add_space(6.0);
 }
 
 /// Drag a chart to slide it, double click to see all of it again, and say

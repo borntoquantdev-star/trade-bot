@@ -9,7 +9,6 @@
 //! nothing in the HTML has to know the hashed bundle filename.
 
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast as _;
 
 const CANVAS_ID: &str = "board_canvas";
 const BOOT_ID: &str = "boot";

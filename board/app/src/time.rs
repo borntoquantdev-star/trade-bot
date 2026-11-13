@@ -1,7 +1,7 @@
 //! Time on the board, in Thailand's.
 //!
-//! Every timestamp the bot and the exchange write is UTC - `16:47:11+00:00`
-//! - and a room of students in Bangkok reading `16:47` for a trade they
+//! Every timestamp the bot and the exchange write is UTC (`16:47:11+00:00`),
+//! and a room of students in Bangkok reading `16:47` for a trade they
 //! watched happen at a quarter to midnight is a room that stops trusting
 //! the clock column. So everything a card prints goes through here first and
 //! comes out seven hours later.

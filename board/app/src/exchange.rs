@@ -186,8 +186,10 @@ impl Book {
     /// the rows. Both sides share one scale, or a thin side would look as
     /// deep as a thick one.
     pub fn deepest(&self, rows: usize) -> f64 {
-        let bid = Self::totals(&self.bids).into_iter().take(rows).last();
-        let ask = Self::totals(&self.asks).into_iter().take(rows).last();
+        // The running total of the last row shown, read from the back
+        // rather than by walking to it.
+        let bid = Self::totals(&self.bids).into_iter().take(rows).next_back();
+        let ask = Self::totals(&self.asks).into_iter().take(rows).next_back();
         bid.unwrap_or(0.0)
             .max(ask.unwrap_or(0.0))
             .max(f64::MIN_POSITIVE)

@@ -4,7 +4,7 @@
 //! handles pan and zoom, so nothing here needs to know where the camera is -
 //! which is the whole reason the board can be infinite.
 
-use egui::{Align2, CornerRadius, FontId, Rect, Response, Sense, Ui, UiBuilder, Vec2};
+use egui::{CornerRadius, FontId, Rect, Response, Sense, Ui, UiBuilder, Vec2};
 
 use crate::theme;
 
@@ -156,7 +156,11 @@ pub fn show_with_tools(
     // Dragging: the header only, same as the web dashboard. Registered
     // before the header's own buttons, so a click on a button is a click on
     // the button and not the start of a drag.
-    let response = ui.interact(head_rect, ui.id().with(title).with("head"), Sense::drag());
+    let response = ui.interact(
+        head_rect,
+        ui.scope_id().with(title).with("head"),
+        Sense::drag(),
+    );
     if response.dragged() {
         slot.translate(response.drag_delta());
     }
