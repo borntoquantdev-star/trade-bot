@@ -58,10 +58,11 @@
 
   /** นับผลการตัดสินใจทั้งหมด แยกตามชนิด */
   function tally(rows) {
-    const out = { ticks: rows.length, signals: 0, orders: 0, rejects: 0, errors: 0, byCode: {} };
+    const out = { ticks: rows.length, signals: 0, orders: 0, rejects: 0, exits: 0, errors: 0, byCode: {} };
     for (const row of rows) {
       if (row.signal) out.signals += 1;
       if (row.order) out.orders += 1;
+      if (row.exit) out.exits += 1;
       if (row.error) out.errors += 1;
       if (row.reject) {
         out.rejects += 1;
@@ -179,7 +180,13 @@
 
     // 5) ไม้ที่ถืออยู่
     const pos = latest.position;
-    if (pos) {
+    if (latest.exit) {
+      // บรรทัดที่ปิดไม้ยังมี position ของไม้ที่เพิ่งปิดติดมาด้วย
+      // ถ้าเขียนว่า "ถืออยู่" ก็จะตรงข้ามกับสิ่งที่เพิ่งเกิด
+      at("position").state = "wip";
+      at("position").metric = "ปิดแล้ว";
+      at("position").detail = `เพิ่งปิด: ${latest.exit.reason || "ไม่ได้บันทึกเหตุผล"}`;
+    } else if (pos) {
       at("position").state = "ready";
       at("position").metric = pos.side;
       at("position").detail = `${pos.side} ${pos.qty} @ ${pos.entry_price}`;
@@ -208,6 +215,16 @@
       const row = rows[i];
       if (row.error) {
         out.push({ at: row.at, kind: "error", title: "ผิดพลาด", text: row.error });
+      } else if (row.exit) {
+        out.push({
+          at: row.at,
+          kind: "exit",
+          title: "ปิดไม้",
+          text:
+            (row.exit.reason || "ไม่ได้บันทึกเหตุผล") +
+            (row.exit.simulated ? " · paper" : ""),
+          code: row.exit.broker_order_id,
+        });
       } else if (row.order) {
         out.push({
           at: row.at,

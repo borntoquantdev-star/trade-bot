@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tradebot.money import D
-from tradebot.risk import client_order_id, explain, risk_gate
+from tradebot.risk import client_order_id, explain, risk_gate, show
 from tradebot.types import (
     InstrumentSpec,
     PortfolioState,
@@ -363,3 +363,20 @@ def test_the_order_carries_the_idempotency_key(state, limits, spec):
 def test_explain_describes_both_outcomes(state, limits, spec):
     assert explain(gate(long_signal(), state, limits, spec)).startswith("APPROVED")
     assert explain(gate(long_signal(), state.with_halt("x"), limits, spec)).startswith("REFUSED")
+
+
+# --- how refusals read ------------------------------------------------------
+
+
+def test_a_computed_amount_is_rounded_before_a_human_reads_it():
+    # 3% of 9,801.59 is exact to twenty-odd places, and none of them help.
+    assert show(D("-294.0475515688794725751988960")) == "-294.0476"
+
+
+def test_a_round_number_keeps_no_decimal_tail():
+    assert show(D("10000")) == "10000"
+    assert show(D("9801.5900000")) == "9801.59"
+
+
+def test_a_tiny_amount_is_never_shown_as_zero():
+    assert show(D("0.00001")) != "0"

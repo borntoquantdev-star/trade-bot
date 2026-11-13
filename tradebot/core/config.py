@@ -39,6 +39,7 @@ from typing import Any
 
 import yaml
 
+from ..intervals import INTERVALS
 from ..money import D, pct
 from ..types import InstrumentSpec, RiskLimits
 
@@ -49,7 +50,6 @@ GRVT_ENVS = ("testnet", "prod")
 HYPERLIQUID_NETWORKS = ("testnet", "mainnet")
 
 #: Candle intervals both venues accept.
-INTERVALS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w")
 
 #: What each venue looks like when nothing is configured. Paper trading uses
 #: these; a live session replaces them with the exchange's own metadata.
@@ -252,6 +252,20 @@ class BotConfig:
         """True when the chosen venue points at real money."""
         return self.venue.is_live
 
+    @property
+    def has_credentials(self) -> bool:
+        """Is everything needed to trade for real present?
+
+        The same list `require_live_credentials` insists on, asked as a
+        question instead of as an exception - so a read-only check can say
+        "there are no keys here" without refusing to run.
+        """
+        try:
+            self.require_live_credentials()
+        except ConfigError:
+            return False
+        return True
+
     def require_live_credentials(self) -> None:
         """Raise unless everything needed to trade for real is present.
 
@@ -290,22 +304,27 @@ class BotConfig:
 # --- loading ---------------------------------------------------------------
 
 
-def _expand_env(value: Any) -> Any:
-    """Replace a whole-string ``${VAR}`` with its environment value."""
+def _expand_env(value: Any, environ: Mapping[str, str]) -> Any:
+    """Replace a whole-string ``${VAR}`` with its value from *environ*.
+
+    The mapping is passed in rather than read from ``os.environ`` here, so
+    that a ``.env`` file and a test's own environment both work - and so
+    that ``load_config(env=...)`` means what it says.
+    """
     if isinstance(value, str):
         match = _ENV_PATTERN.match(value.strip())
         if match:
             name = match.group(1)
-            if name not in os.environ:
+            if name not in environ:
                 raise ConfigError(
                     f"the config refers to ${{{name}}} but that environment variable is not set"
                 )
-            return os.environ[name]
+            return environ[name]
         return value
     if isinstance(value, Mapping):
-        return {k: _expand_env(v) for k, v in value.items()}
+        return {k: _expand_env(v, environ) for k, v in value.items()}
     if isinstance(value, list):
-        return [_expand_env(v) for v in value]
+        return [_expand_env(v, environ) for v in value]
     return value
 
 
@@ -342,6 +361,50 @@ def raw_defaults() -> dict[str, Any]:
     return copy.deepcopy(DEFAULTS)
 
 
+def read_env_file(config_path: str | Path | None = None) -> dict[str, str]:
+    """Read ``KEY=value`` lines from a ``.env`` file, if there is one.
+
+    Looked for next to the config file first, then in ``bot/.env``, then in
+    the working directory - the three places a person actually puts it.
+    Values are taken literally: no shell, no expansion, no quotes stripped
+    beyond one matching pair, because a private key is a string and nothing
+    should be clever about it.
+
+    A missing or unreadable file is not an error.  Keys live in files that
+    are deliberately absent from the repository, so "there is none" is the
+    normal case.
+    """
+    candidates: list[Path] = []
+    if config_path:
+        candidates.append(Path(config_path).resolve().parent / ".env")
+    candidates.append(Path("bot") / ".env")
+    candidates.append(Path(".env"))
+
+    found: dict[str, str] = {}
+    for candidate in candidates:
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].lstrip()
+            name, sep, value = line.partition("=")
+            if not sep:
+                continue
+            name = name.strip()
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            # The first file that mentions a name owns it: the one beside
+            # the config is the most specific.
+            found.setdefault(name, value)
+    return found
+
+
 def load_config(
     path: str | Path | None = None,
     data: Mapping[str, Any] | None = None,
@@ -357,6 +420,14 @@ def load_config(
     # จำไว้ว่าผู้ใช้ระบุ exchange เองหรือไม่ ก่อนที่ค่า default จะกลบ
     exchange_was_set = False
 
+    # What ${VAR} resolves against: the real process environment, plus a
+    # .env file for anything it does not mention.  Deliberately not the
+    # `env` argument - that one is the override layer below, and tests pass
+    # `env={}` to it while still expecting ${VAR} to see their own shell.
+    expansion = dict(os.environ)
+    for name, value in read_env_file(path).items():
+        expansion.setdefault(name, value)
+
     if path is not None:
         file_path = Path(path)
         if not file_path.exists():
@@ -369,16 +440,17 @@ def load_config(
         if not isinstance(loaded, Mapping):
             raise ConfigError(f"{file_path} must contain a YAML mapping at the top level")
         exchange_was_set = exchange_was_set or "exchange" in loaded
-        _deep_merge(merged, _expand_env(loaded))
+        _deep_merge(merged, _expand_env(loaded, expansion))
         source = str(file_path)
 
     if data:
         exchange_was_set = exchange_was_set or "exchange" in data
-        _deep_merge(merged, _expand_env(data))
+        _deep_merge(merged, _expand_env(data, expansion))
         if source == "<defaults>":
             source = "<dict>"
 
-    environ = os.environ if env is None else env
+    environ = dict(os.environ) if env is None else dict(env)
+
     for var, (section, key) in ENV_OVERRIDES.items():
         if environ.get(var) in (None, ""):
             continue

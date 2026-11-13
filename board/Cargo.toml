@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["app", "server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+# Thin LTO, not fat. Fat LTO with codegen-units = 1 on the egui tree takes
+# tens of minutes and enough memory to wedge a Docker VM that has been
+# promised more RAM than the host can actually spare. The binary is a little
+# larger; the build finishes, which is worth more.
+lto = "thin"
+codegen-units = 16
+strip = true

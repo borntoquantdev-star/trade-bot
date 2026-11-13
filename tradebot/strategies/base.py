@@ -77,6 +77,37 @@ class Strategy(ABC):
         Must be free of I/O and of surprises: called once per loop iteration.
         """
 
+    def get_exit(self, market: MarketView) -> str | None:
+        """Ask to close the open position, returning why - or ``None`` to hold.
+
+        Called once per iteration, before :meth:`get_signal`, and only while a
+        position is open.  The reason is written to the audit trail and shown
+        on the dashboard, so write it for a person: ``"target reached"`` beats
+        ``"cond_3"``.
+
+        Two rules that are easy to get wrong:
+
+        * **Closing is not sized and not gated.**  The risk gate approves
+          *taking* risk; getting out reduces it.  A halted bot must still be
+          able to flatten, or a halt would trap the position it was meant to
+          protect.
+        * **This template does not enforce your stop for you.**  The
+          backtester models stops and targets because it owns the bar; the
+          live loop only knows the price it just read, so if the stop matters
+          it has to be checked here.  :meth:`stop_hit` is the usual way.
+        """
+        return None
+
+    @staticmethod
+    def stop_hit(market: MarketView, stop_price: Decimal) -> bool:
+        """Has the market reached the stop of the open position?"""
+        held = market.position
+        if held is None:
+            return False
+        if held.side.value == "buy":
+            return market.price <= stop_price
+        return market.price >= stop_price
+
     # --- optional hooks ---------------------------------------------------
 
     def initialize(self) -> None:

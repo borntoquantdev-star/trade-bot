@@ -15,9 +15,9 @@ dashboard, the tests - is the same code either way.
 Every order passes through one pure function, `risk_gate()`, which sizes it
 from a risk budget and a stop distance and refuses it for one of thirteen
 named reasons. The gate performs no I/O and has no clock of its own, so the
-same code serves live trading, paper trading and - when it exists - a
-backtest.
+same code serves live trading, paper trading and the backtester.
 
+- [Backtesting](docs/backtest.md) - download history, replay it, read the result
 - [คู่มือภาษาไทย](docs/README.th.md) - install and usage in Thai
 - [VS Code and AI assistants](docs/vscode.md) - Codex, Claude Code, Copilot
 - [Architecture and the risk contract](docs/architecture.md)
@@ -225,6 +225,8 @@ it the bot refuses to start and sends nothing.
 | `tradebot --live` | Send real orders. Required when `network: mainnet`. |
 | `tradebot --doctor` | Check config, connection, price, instrument, account, candles. |
 | `tradebot --list-strategies` | What is registered. |
+| `tradebot --fetch-candles --days 365` | Download price history into `data/candles`. |
+| `tradebot --backtest --days 365 --trades` | Replay it through the risk gate. Offline. |
 | `tradebot --resume` | Clear a halt the risk gate wrote. |
 | `tradebot --close --yes` | Flatten the configured symbol. |
 | `tradebot --iterations N` | Stop after N loops. |
@@ -319,9 +321,10 @@ or Copilot Chat, or ask Codex to read `ai/workflows/strategy-builder.md`. See
 
 Read these before trusting it with anything:
 
-- **No backtester.** Nothing in this repository can tell you whether a
-  strategy is profitable. Paper and testnet runs prove the plumbing, nothing
-  more.
+- **A backtest is a filter for bad ideas, not evidence for good ones.** It
+  models fills pessimistically and does not charge funding at all. See
+  [docs/backtest.md](docs/backtest.md) for exactly what it does and does not
+  simulate.
 - **Strategies see closes, not bars.** The window is primed from real candles
   and then extended with observed marks; it is not a full OHLCV series.
 - **Optimistic paper fills** at the limit price, immediately.

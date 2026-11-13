@@ -1,0 +1,19 @@
+[package]
+name = "board-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Serves the board's WASM bundle, and the files the bot writes"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# rustls rather than the system TLS so the runtime image needs no openssl.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }

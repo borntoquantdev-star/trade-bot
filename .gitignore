@@ -2,7 +2,13 @@
 config/config.yaml
 config.yaml
 .env
+.env.*
+bot/.env
+config/.env
 logs/
+# Downloaded price history: reproducible with --fetch-candles,
+# and large enough to make a repository unpleasant to clone.
+data/candles/
 *.log
 
 # Python
@@ -31,3 +37,8 @@ htmlcov/
 *.swp
 .DS_Store
 Thumbs.db
+
+# The Rust board: build output (gigabytes) and the layout a person dragged
+# their cards into, which is theirs and not the repository's.
+target/
+board-layout.json

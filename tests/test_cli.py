@@ -5,9 +5,16 @@ cover the paths a user actually types - including the ones that must refuse to
 do anything.
 """
 
+import logging
+
 import pytest
 
-from tradebot.cli.main import build_parser, main
+from tradebot.brokers.paper import PaperBroker, fixed_price
+from tradebot.cli.main import _doctor, build_parser, main
+from tradebot.core.config import load_config
+from tradebot.core.engine import Engine
+from tradebot.money import D
+from tradebot.strategies import build_strategy
 
 TESTNET_CONFIG = """
 exchange: grvt
@@ -72,6 +79,8 @@ def paths(tmp_path):
         str(tmp_path / "state.json"),
         "--audit-file",
         str(tmp_path / "audit.jsonl"),
+        "--runs-file",
+        str(tmp_path / "runs.jsonl"),
     ]
 
 
@@ -251,3 +260,45 @@ def test_a_grvt_config_runs_on_paper(tmp_path, config_file, capsys):
     )
     assert code == 0
     assert "BTC_USDT_Perp" in capsys.readouterr().out
+
+
+def test_the_doctor_says_when_it_only_asked_the_paper_broker(tmp_path, caplog):
+    """Without this line a run with no keys answers "all good" about the
+    simulator, and the person reading it believes their exchange account is
+    connected - the one conclusion the command exists to prevent."""
+    config = load_config(data={"exchange": "grvt", "trading": {"symbol": "BTC_USDT_Perp"}}, env={})
+    broker = PaperBroker(fixed_price(D("100000")), config.instrument, equity=D("10000"))
+    engine = Engine(
+        config=config,
+        broker=broker,
+        strategy=build_strategy("random"),
+        state_path=tmp_path / "state.json",
+        audit_path=tmp_path / "audit.jsonl",
+    )
+    engine.start()
+
+    with caplog.at_level(logging.INFO):
+        _doctor(engine, logging.getLogger("tradebot"), paper=True, has_keys=False)
+
+    text = caplog.text
+    assert "paper (offline simulator)" in text
+    assert "no credentials" in text
+
+
+def test_the_doctor_names_the_exchange_when_it_really_connected(tmp_path, caplog):
+    config = load_config(data={"exchange": "grvt", "trading": {"symbol": "BTC_USDT_Perp"}}, env={})
+    broker = PaperBroker(fixed_price(D("100000")), config.instrument, equity=D("10000"))
+    engine = Engine(
+        config=config,
+        broker=broker,
+        strategy=build_strategy("random"),
+        state_path=tmp_path / "state.json",
+        audit_path=tmp_path / "audit.jsonl",
+    )
+    engine.start()
+
+    with caplog.at_level(logging.INFO):
+        _doctor(engine, logging.getLogger("tradebot"), paper=False, has_keys=True)
+
+    assert "live connection" in caplog.text
+    assert "no credentials" not in caplog.text

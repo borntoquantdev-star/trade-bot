@@ -10,7 +10,7 @@ exchange: grvt        # หรือ hyperliquid
 
 ทุกอย่างเหนือชั้น broker — risk gate, engine, กลยุทธ์, dashboard, เทสทั้งหมด — เป็นโค้ดชุดเดียวกันไม่ว่าจะเลือกตลาดไหน
 
-ทุกออเดอร์ต้องผ่านฟังก์ชันเดียวชื่อ `risk_gate()` ซึ่งคำนวณขนาดไม้จากงบความเสี่ยงกับระยะ stop และปฏิเสธออเดอร์ได้ด้วยเหตุผล 13 แบบที่มีชื่อชัดเจน ฟังก์ชันนี้ไม่ต่อเน็ต ไม่อ่านไฟล์ ไม่มีนาฬิกาของตัวเอง — จึงใช้โค้ดชุดเดียวกันได้ทั้ง live, paper และ backtest (ถ้ามีในอนาคต)
+ทุกออเดอร์ต้องผ่านฟังก์ชันเดียวชื่อ `risk_gate()` ซึ่งคำนวณขนาดไม้จากงบความเสี่ยงกับระยะ stop และปฏิเสธออเดอร์ได้ด้วยเหตุผล 13 แบบที่มีชื่อชัดเจน ฟังก์ชันนี้ไม่ต่อเน็ต ไม่อ่านไฟล์ ไม่มีนาฬิกาของตัวเอง — จึงใช้โค้ดชุดเดียวกันได้ทั้ง live, paper และ backtest
 
 ---
 
@@ -295,7 +295,7 @@ logs/tradebot.log   log อ่านด้วยตาคน หมุนไฟ�
 
 ## ข้อจำกัดที่ต้องรู้ก่อนใช้
 
-- **ไม่มี backtest** ไม่มีอะไรในรีโปนี้บอกได้ว่ากลยุทธ์กำไรหรือไม่ · paper กับ testnet พิสูจน์ได้แค่ว่าท่อต่อถูก
+- **backtest เป็นเครื่องคัดไอเดียที่แย่ออก ไม่ใช่หลักฐานว่าไอเดียดี** มันจำลองการ fill แบบเข้มไว้ก่อน และ**ไม่คิดค่า funding เลย** อ่าน [docs/backtest.md](backtest.md) ว่าจำลองอะไรบ้างและไม่จำลองอะไร
 - **กลยุทธ์เห็นแค่ราคาปิด ไม่ใช่แท่งเต็ม** window ถูก prime จากแท่งเทียนจริงแล้วต่อด้วยราคาที่สังเกตได้ ยังไม่ใช่ OHLCV ครบชุด
 - **paper fill แบบมองโลกสวย** คือได้ราคา limit ทันที ไม่มี partial fill ไม่มีคิว
 - **บอทไม่แตะ leverage ของบัญชีคุณ** มันคุม exposure แทน
@@ -315,11 +315,31 @@ logs/tradebot.log   log อ่านด้วยตาคน หมุนไฟ�
 | `config refers to ${HYPERLIQUID_API_WALLET_KEY}` | ตัวแปรนั้นยังไม่ได้ set ใน shell นี้ · export ก่อน หรือใส่ค่าลง `config/config.yaml` |
 | เหมือนค้าง ไม่มีอะไรขึ้น | มันหลับรอ `loop_interval` วินาที · ใส่ `--iterations N` ลด `loop_interval` หรือกด `Ctrl+C` |
 
+## อยากเห็นมันทำงานก่อน (3 นาที ไม่ต้องมีกุญแจ)
+
+```bash
+tradebot --dry-run --paper-live --config config/demo.yaml --iterations 36
+```
+
+- `--dry-run` ออเดอร์เป็นกระดาษ ไม่มีอะไรถึงตลาดจริง
+- `--paper-live` **ราคาจริงจากฟีดสาธารณะของ GRVT** ไม่ต้องใช้ API key
+- กลยุทธ์ `ping_pong` เข้าเมื่อราคาหลุดจากค่าเฉลี่ย 12 ราคาล่าสุดเกิน 0.03%
+  ออกเมื่อราคากลับมา ชน stop 0.4% หรือถือเกิน 3 นาที
+
+**มันไม่ใช่กลยุทธ์ทำเงิน** ระยะที่มันเล่นเล็กกว่าค่าธรรมเนียม รันนานๆ ขาดทุนแน่นอน
+มันมีไว้ให้เห็นว่าสายพานทำงาน: สัญญาณ → ด่านความเสี่ยง → ออเดอร์ → ได้ไม้ → ปิดเองพร้อมเหตุผล
+
+ดูสดๆ ระหว่างรันได้ที่ `node dashboard/server.js --open` หรือบอร์ดใน `board/`
+
+รันทิ้งไว้ในกล่อง: `docker build -t tradebot . && docker run --rm tradebot`
+(บน Railway ชี้มาที่รีโปนี้ มันอ่าน `Dockerfile` เอง)
+
 ## อ่านต่อ
 
 - [docs/vscode.md](vscode.md) — ตั้งค่า VS Code และ AI ทั้งสามตัว (Codex / Claude Code / Copilot)
 - [docs/architecture.md](architecture.md) — สถาปัตยกรรมและสัญญาของ risk gate
 - [docs/strategies.md](strategies.md) — วิธีเขียนกลยุทธ์ของตัวเอง
 - [dashboard/README.md](../dashboard/README.md) — dashboard ดูบอททำงาน realtime
+- [board/README.md](../board/README.md) — บอร์ดแคนวาส (Rust/WASM) เฝ้าบอทและตลาดในหน้าเดียว รันด้วย Docker ได้
 - [docs/from-grvt-demo-bot.md](from-grvt-demo-bot.md) — ของเก่า grvt_demo_bot ต่างจากนี้อย่างไร
 - [ai/workflows/strategy-builder.md](../ai/workflows/strategy-builder.md) — บทสัมภาษณ์ที่ AI ใช้พาสร้างกลยุทธ์

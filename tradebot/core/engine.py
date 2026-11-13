@@ -35,6 +35,7 @@ from ..brokers.base import Broker, BrokerError, OrderReceipt
 from ..money import ZERO, D
 from ..risk import Decision, explain, risk_gate
 from ..strategies.base import MarketView, Strategy
+from ..trace import Trace
 from ..types import PortfolioState, Position, Reject, RejectCode, Signal, SizedOrder
 from .config import BotConfig
 
@@ -56,6 +57,16 @@ class EngineState:
     halted: bool = False
     halt_reason: str = ""
     sent_order_ids: list[str] = field(default_factory=list)
+    #: Which modules this bot is running, written at start-up.
+    #:
+    #: Not state that has to survive a restart - it is rewritten every time
+    #: the engine starts.  It lives here because this file is the one a
+    #: watching dashboard already reads, and because a dashboard that has to
+    #: guess the strategy from a config file will sooner or later guess the
+    #: wrong one: the config it can see is not always the config the bot was
+    #: started with.
+    strategy_module: str = ""
+    broker_module: str = ""
 
     @classmethod
     def load(cls, path: Path | None) -> EngineState:
@@ -72,6 +83,8 @@ class EngineState:
             halted=bool(raw.get("halted", False)),
             halt_reason=str(raw.get("halt_reason", "")),
             sent_order_ids=list(raw.get("sent_order_ids", []))[-500:],
+            strategy_module=str(raw.get("strategy_module", "")),
+            broker_module=str(raw.get("broker_module", "")),
         )
 
     def save(self, path: Path | None) -> None:
@@ -85,6 +98,8 @@ class EngineState:
             "halted": self.halted,
             "halt_reason": self.halt_reason,
             "sent_order_ids": self.sent_order_ids[-500:],
+            "strategy_module": self.strategy_module,
+            "broker_module": self.broker_module,
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -101,6 +116,9 @@ class TickResult:
     signal: Signal | None = None
     decision: Decision | None = None
     receipt: OrderReceipt | None = None
+    #: Why the strategy asked to close, and what the broker said.
+    exit_reason: str | None = None
+    exit_receipt: OrderReceipt | None = None
     error: str | None = None
 
     @property
@@ -126,6 +144,7 @@ class Engine:
         clock: Clock = utc_now,
         history: int = 200,
         max_consecutive_errors: int = 5,
+        trace: bool = False,
     ) -> None:
         self.config = config
         self.broker = broker
@@ -141,6 +160,21 @@ class Engine:
         self.max_consecutive_errors = max_consecutive_errors
         self._consecutive_errors = 0
         self._instrument = config.instrument
+        # Recording which lines ran costs nothing when nobody is reading the
+        # audit trail, so it follows the trail rather than having a switch of
+        # its own to forget about.
+        self.trace_enabled = trace
+        self._trace = Trace(enabled=False)
+        # What this run has done so far, for the run log.  Counted here
+        # rather than derived from the audit trail later, because the trail
+        # is trimmed to its tail and a run from last week would come back
+        # with no numbers at all.
+        self.ticks = 0
+        self.orders = 0
+        self.exits = 0
+        self.rejects = 0
+        self.first_equity: Decimal | None = None
+        self.last_equity: Decimal | None = None
 
     # --- setup -----------------------------------------------------------
 
@@ -154,6 +188,11 @@ class Engine:
             self._instrument = self.config.instrument
         self._warm_up()
         self.strategy.initialize()
+        # Write down what is running before the first tick, so anything
+        # watching knows whose code to show without being told.
+        self.state.strategy_module = type(self.strategy).__module__
+        self.state.broker_module = type(self.broker).__module__
+        self.state.save(self.state_path)
         if self.state.halted:
             self.log.error(
                 "state file says trading is HALTED: %s. Clear it with "
@@ -197,127 +236,145 @@ class Engine:
 
     def tick(self) -> TickResult:
         """Run one full decision cycle.  Never raises for market conditions."""
-        now = self.clock()
-        symbol = self.config.trading.symbol
+        # Recording which lines of this package ran, so the board can show
+        # the path a tick really took instead of guessing it from the row it
+        # left behind.  Off unless somebody asked for it.
+        with Trace(enabled=self.trace_enabled) as self._trace:
+            now = self.clock()
+            symbol = self.config.trading.symbol
 
-        try:
-            price = self.broker.fetch_mark_price(symbol)
-            equity = self.broker.fetch_equity()
-            positions = dict(self.broker.fetch_positions())
-        except BrokerError as exc:
-            return self._record(
-                TickResult(
-                    at=now,
-                    price=ZERO,
-                    equity=ZERO,
-                    symbol=symbol,
-                    error=f"broker read failed: {exc}",
+            try:
+                price = self.broker.fetch_mark_price(symbol)
+                equity = self.broker.fetch_equity()
+                positions = dict(self.broker.fetch_positions())
+            except BrokerError as exc:
+                return self._record(
+                    TickResult(
+                        at=now,
+                        price=ZERO,
+                        equity=ZERO,
+                        symbol=symbol,
+                        error=f"broker read failed: {exc}",
+                    )
                 )
+
+            self.prices.append(price)
+            self._roll_day(now, equity)
+            self.state.peak_equity = max(self.state.peak_equity, equity)
+
+            state = PortfolioState(
+                equity=equity,
+                peak_equity=self.state.peak_equity,
+                realized_pnl_today=equity - self.state.day_start_equity,
+                positions=positions,
+                halted=self.state.halted,
+                halt_reason=self.state.halt_reason,
             )
 
-        self.prices.append(price)
-        self._roll_day(now, equity)
-        self.state.peak_equity = max(self.state.peak_equity, equity)
+            market = MarketView(
+                symbol=symbol,
+                price=price,
+                now=now,
+                equity=equity,
+                position=positions.get(symbol),
+                recent_prices=tuple(self.prices),
+            )
 
-        state = PortfolioState(
-            equity=equity,
-            peak_equity=self.state.peak_equity,
-            realized_pnl_today=equity - self.state.day_start_equity,
-            positions=positions,
-            halted=self.state.halted,
-            halt_reason=self.state.halt_reason,
-        )
+            # Getting out comes before getting in, and never passes the risk
+            # gate: the gate approves *taking* risk, and closing reduces it.  A
+            # halted bot can still flatten, which is the point of a halt - stop
+            # opening, not trap the position the halt was meant to protect.
+            if market.position is not None:
+                try:
+                    leaving = self.strategy.get_exit(market)
+                except Exception as exc:  # a broken strategy must not trap a position
+                    self.strategy.on_error(exc)
+                    leaving = None
+                    self.log.error("strategy.get_exit raised: %r", exc)
+                if leaving:
+                    return self._close(market, leaving)
 
-        market = MarketView(
-            symbol=symbol,
-            price=price,
-            now=now,
-            equity=equity,
-            position=positions.get(symbol),
-            recent_prices=tuple(self.prices),
-        )
-
-        try:
-            signal = self.strategy.get_signal(market)
-        except Exception as exc:  # a broken strategy must not take the bot down
-            self.strategy.on_error(exc)
-            return self._record(
-                TickResult(
-                    at=now,
-                    price=price,
-                    equity=equity,
-                    symbol=symbol,
-                    position=positions.get(symbol),
-                    error=f"strategy raised: {exc!r}",
+            try:
+                signal = self.strategy.get_signal(market)
+            except Exception as exc:  # a broken strategy must not take the bot down
+                self.strategy.on_error(exc)
+                return self._record(
+                    TickResult(
+                        at=now,
+                        price=price,
+                        equity=equity,
+                        symbol=symbol,
+                        position=positions.get(symbol),
+                        error=f"strategy raised: {exc!r}",
+                    )
                 )
-            )
 
-        if signal is None:
-            return self._record(
-                TickResult(
-                    at=now,
-                    price=price,
-                    equity=equity,
-                    symbol=symbol,
-                    position=positions.get(symbol),
+            if signal is None:
+                return self._record(
+                    TickResult(
+                        at=now,
+                        price=price,
+                        equity=equity,
+                        symbol=symbol,
+                        position=positions.get(symbol),
+                    )
                 )
+
+            decision = risk_gate(
+                signal=signal,
+                state=state,
+                limits=self.config.risk,
+                spec=self._instrument,
+                mark_price=price,
+                now=now,
+            )
+            result = TickResult(
+                at=now,
+                price=price,
+                equity=equity,
+                symbol=symbol,
+                position=positions.get(symbol),
+                signal=signal,
+                decision=decision,
             )
 
-        decision = risk_gate(
-            signal=signal,
-            state=state,
-            limits=self.config.risk,
-            spec=self._instrument,
-            mark_price=price,
-            now=now,
-        )
-        result = TickResult(
-            at=now,
-            price=price,
-            equity=equity,
-            symbol=symbol,
-            position=positions.get(symbol),
-            signal=signal,
-            decision=decision,
-        )
+            if isinstance(decision, Reject):
+                level = (
+                    logging.ERROR
+                    if decision.code
+                    in (RejectCode.HALTED, RejectCode.MAX_DRAWDOWN, RejectCode.DAILY_LOSS_LIMIT)
+                    else logging.INFO
+                )
+                self.log.log(level, explain(decision))
+                self.strategy.on_reject(decision)
+                if decision.code in (RejectCode.MAX_DRAWDOWN, RejectCode.DAILY_LOSS_LIMIT):
+                    self.halt(f"{decision.code.value}: {decision.detail}")
+                return self._record(result)
 
-        if isinstance(decision, Reject):
-            level = (
-                logging.ERROR
-                if decision.code
-                in (RejectCode.HALTED, RejectCode.MAX_DRAWDOWN, RejectCode.DAILY_LOSS_LIMIT)
-                else logging.INFO
-            )
-            self.log.log(level, explain(decision))
-            self.strategy.on_reject(decision)
-            if decision.code in (RejectCode.MAX_DRAWDOWN, RejectCode.DAILY_LOSS_LIMIT):
-                self.halt(f"{decision.code.value}: {decision.detail}")
+            if decision.client_order_id in self.state.sent_order_ids:
+                self.log.warning(
+                    "order %s was already sent; not sending it twice", decision.client_order_id
+                )
+                return self._record(result)
+
+            self.log.info(explain(decision))
+            try:
+                result.receipt = self.broker.place_order(decision)
+            except BrokerError as exc:
+                result.error = f"order rejected by broker: {exc}"
+                self.log.error(result.error)
+                return self._record(result)
+
+            # Write the id to disk the moment the order is accepted, not at the end
+            # of the loop: a crash in between is exactly the case idempotency
+            # exists for.  A broker *rejection* deliberately does not record the
+            # id, so a genuine retry stays possible; the ambiguous case (we timed
+            # out but the order did reach the book) is covered by the exchange,
+            # which holds the same client_order_id and will refuse the duplicate.
+            self.state.sent_order_ids.append(decision.client_order_id)
+            self.state.save(self.state_path)
+            self.strategy.on_order_placed(result.receipt)
             return self._record(result)
-
-        if decision.client_order_id in self.state.sent_order_ids:
-            self.log.warning(
-                "order %s was already sent; not sending it twice", decision.client_order_id
-            )
-            return self._record(result)
-
-        self.log.info(explain(decision))
-        try:
-            result.receipt = self.broker.place_order(decision)
-        except BrokerError as exc:
-            result.error = f"order rejected by broker: {exc}"
-            self.log.error(result.error)
-            return self._record(result)
-
-        # Write the id to disk the moment the order is accepted, not at the end
-        # of the loop: a crash in between is exactly the case idempotency
-        # exists for.  A broker *rejection* deliberately does not record the
-        # id, so a genuine retry stays possible; the ambiguous case (we timed
-        # out but the order did reach the book) is covered by the exchange,
-        # which holds the same client_order_id and will refuse the duplicate.
-        self.state.sent_order_ids.append(decision.client_order_id)
-        self.state.save(self.state_path)
-        self.strategy.on_order_placed(result.receipt)
-        return self._record(result)
 
     # --- loop ------------------------------------------------------------
 
@@ -393,8 +450,45 @@ class Engine:
         if self._consecutive_errors >= self.max_consecutive_errors:
             self.halt(f"{self._consecutive_errors} consecutive failures; last was {message}")
 
+    def _close(self, market: MarketView, reason: str) -> TickResult:
+        """Do what the strategy asked: flatten, and write down why."""
+        result = TickResult(
+            at=market.now,
+            price=market.price,
+            equity=market.equity,
+            symbol=market.symbol,
+            position=market.position,
+            exit_reason=reason,
+        )
+        try:
+            result.exit_receipt = self.broker.close_position(market.symbol)
+        except BrokerError as exc:
+            result.error = f"close rejected by broker: {exc}"
+            self.log.error(result.error)
+            return self._record(result)
+        self.log.info(
+            "closed %s: %s",
+            market.symbol,
+            reason,
+        )
+        return self._record(result)
+
     def _record(self, result: TickResult) -> TickResult:
         """Append one line to the audit trail."""
+        # Stop before the row is built, or the picture of the tick would end
+        # up including the code that writes the picture.
+        self._trace.stop()
+        self.ticks += 1
+        if result.order is not None:
+            self.orders += 1
+        if result.reject is not None:
+            self.rejects += 1
+        if result.exit_reason is not None:
+            self.exits += 1
+        if result.equity > ZERO:
+            if self.first_equity is None:
+                self.first_equity = result.equity
+            self.last_equity = result.equity
         if self.audit_path is None:
             return result
         row: dict[str, Any] = {
@@ -431,8 +525,19 @@ class Engine:
                 "broker_order_id": result.receipt.broker_order_id,
                 "simulated": result.receipt.simulated,
             }
+        if result.exit_reason is not None:
+            row["exit"] = {
+                "reason": result.exit_reason,
+                "broker_order_id": (
+                    result.exit_receipt.broker_order_id if result.exit_receipt else ""
+                ),
+                "simulated": (result.exit_receipt.simulated if result.exit_receipt else False),
+            }
         if result.error:
             row["error"] = result.error
+        trace = self._trace.as_json()
+        if trace is not None:
+            row["trace"] = trace
         try:
             self.audit_path.parent.mkdir(parents=True, exist_ok=True)
             with self.audit_path.open("a", encoding="utf-8") as handle:

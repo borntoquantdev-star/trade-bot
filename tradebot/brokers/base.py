@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
@@ -50,6 +51,8 @@ class Broker(Protocol):
     """What the engine needs from an exchange."""
 
     name: str
+    #: Bars this venue returns in one history call.
+    max_candles_per_request: int
 
     def connect(self) -> None:
         """Open the session.  Called once before the loop starts."""
@@ -72,6 +75,19 @@ class Broker(Protocol):
         The engine calls this once at start-up to fill the strategy's price
         window, so an indicator needing 50 points does not have to wait 50
         iterations.  A broker with no candle feed may return an empty list.
+        """
+
+    def fetch_candles_range(
+        self, symbol: str, interval: str, start: datetime, end: datetime
+    ) -> list[Candle]:
+        """One page of closed bars with open times in [start, end), oldest first.
+
+        This is the downloader's primitive, not the engine's.  A venue decides
+        how many bars a page holds, so an implementation returns what the venue
+        gave rather than everything that was asked for, and
+        :func:`tradebot.data.fetch.download` walks forward until the span is
+        covered.  Advertise the page size as ``max_candles_per_request`` so the
+        walker can tell a short page from the end of history.
         """
 
     def place_order(self, order: SizedOrder) -> OrderReceipt:

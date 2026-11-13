@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from ..intervals import interval_delta
 from ..money import ZERO, D, Number
 from ..types import Candle, InstrumentSpec, Position, Side, SizedOrder
 from .base import BrokerError, OrderReceipt, require_positive
@@ -102,6 +103,7 @@ class PaperBroker:
     """Simulated exchange: deterministic, offline, and honest about it."""
 
     name = "paper"
+    max_candles_per_request = 1000
 
     def __init__(
         self,
@@ -178,6 +180,43 @@ class PaperBroker:
             )
             for i, price in enumerate(prices)
         ]
+
+    def fetch_candles_range(
+        self, symbol: str, interval: str, start: datetime, end: datetime
+    ) -> list[Candle]:
+        """Synthetic bars on the interval grid, so the downloader is testable.
+
+        One bar per step, priced by the same source the rest of the paper
+        broker uses: a fixed source draws a flat line, a random walk draws a
+        wiggle.  It is not market data and does not pretend to be - it exists
+        so the download, store and backtest path can be exercised with no
+        network and no credentials.
+        """
+        if symbol != self._instrument.symbol:
+            raise BrokerError(
+                f"paper broker was set up for {self._instrument.symbol}, not {symbol}"
+            )
+        step = interval_delta(interval)
+        out: list[Candle] = []
+        open_time = start
+        previous = self.fetch_mark_price(symbol)
+        while open_time < end and len(out) < self.max_candles_per_request:
+            close = self.fetch_mark_price(symbol)
+            out.append(
+                Candle(
+                    symbol=symbol,
+                    interval=interval,
+                    open_time=open_time,
+                    open=previous,
+                    high=max(previous, close),
+                    low=min(previous, close),
+                    close=close,
+                    volume=ZERO,
+                )
+            )
+            previous = close
+            open_time += step
+        return out
 
     def place_order(self, order: SizedOrder) -> OrderReceipt:
         if order.symbol in self._positions:

@@ -15,7 +15,16 @@ grvt:
 
   # ออกกุญแจที่หน้า API ของ GRVT แล้วเปิดสิทธิ์เทรดอย่างเดียว ปิดสิทธิ์ถอนเงิน
   # เว้นว่างไว้ได้ถ้าจะเทรดกระดาษ (--dry-run)
-  # ถ้าไม่อยากเก็บค่าไว้ในไฟล์ ให้เขียน ${GRVT_API_KEY} แล้ว export ใน shell แทน
+  #
+  # ทางที่แนะนำ: เขียน ${GRVT_API_KEY} ไว้แบบนี้ แล้วเก็บค่าจริงไว้ในไฟล์ .env
+  # ที่อยู่ข้างๆ คอนฟิกนี้ (หรือ bot/.env หรือ .env ในโฟลเดอร์ที่รัน) หน้าตาแบบนี้
+  #
+  #     GRVT_API_KEY=...
+  #     GRVT_PRIVATE_KEY=...
+  #     GRVT_TRADING_ACCOUNT_ID=...
+  #
+  # ไฟล์ .env อยู่ใน .gitignore แล้ว และตัวแปรจริงใน shell/เซิร์ฟเวอร์ชนะไฟล์เสมอ
+  # (Railway จึงตั้งเป็น environment variable ได้ตามปกติ)
   api_key: ""
   private_key: ""
   trading_account_id: ""

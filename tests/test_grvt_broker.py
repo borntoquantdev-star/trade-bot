@@ -140,10 +140,25 @@ def test_the_broker_fetches_a_price():
 def test_instrument_precision_comes_from_the_market_reply():
     spec = read_instrument(MARKET, SYMBOL, FALLBACK)
     assert spec.tick_size == D("0.5")
-    assert spec.lot_step == D("0.0001"), "lot step = 10 ** -base_decimals"
+    # Not 10 ** -base_decimals. GRVT publishes base_decimals: 9 for BTC and
+    # then refuses a nine-decimal order with "2065 Order size too granular";
+    # min_size is the step the matching engine actually takes.
+    assert spec.lot_step == D("0.002"), "lot step = min_size"
     assert spec.min_qty == D("0.002"), "GRVT publishes min_size in the base asset"
     assert spec.price_sig_figs == 0, "no significant-figure rule on GRVT"
-    assert spec.min_notional == FALLBACK.min_notional, "GRVT does not publish a minimum value"
+    assert spec.min_notional == FALLBACK.min_notional, "this reply carries no min_notional"
+
+
+def test_a_published_minimum_value_is_used_instead_of_the_fallback():
+    # The live venue does publish it now: BTC_USDT_Perp says 100.0.
+    spec = read_instrument({**MARKET, "min_notional": "100.0"}, SYMBOL, FALLBACK)
+    assert spec.min_notional == D("100.0")
+
+
+def test_a_size_that_is_finer_than_the_step_is_rounded_to_the_step():
+    # The rejected order was 0.145451585 on a 0.001 step.
+    spec = read_instrument({**MARKET, "min_size": "0.001"}, SYMBOL, FALLBACK)
+    assert spec.round_qty(D("0.145451585")) == D("0.145")
 
 
 def test_missing_instrument_fields_fall_back():
@@ -161,7 +176,7 @@ def test_the_broker_caches_the_instrument():
     b = broker()
     spec = b.fetch_instrument(SYMBOL)
     assert b.fetch_instrument(SYMBOL) is spec
-    assert spec.lot_step == D("0.0001")
+    assert spec.lot_step == D("0.002"), "the step is min_size from the reply"
 
 
 def test_a_broker_without_any_instrument_source_says_so():

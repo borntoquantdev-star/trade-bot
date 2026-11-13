@@ -12,11 +12,13 @@ from typing import Any
 
 from .base import MarketView, Strategy
 from .ma_cross import MaCrossStrategy
+from .ping_pong import PingPongStrategy
 from .random_strategy import RandomStrategy
 
 STRATEGIES: dict[str, type[Strategy]] = {
     "random": RandomStrategy,
     "ma_cross": MaCrossStrategy,
+    "ping_pong": PingPongStrategy,
 }
 
 
@@ -52,6 +54,7 @@ def describe_strategies() -> str:
 __all__ = [
     "MaCrossStrategy",
     "MarketView",
+    "PingPongStrategy",
     "RandomStrategy",
     "STRATEGIES",
     "Strategy",

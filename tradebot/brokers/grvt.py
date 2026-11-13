@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from ..intervals import INTERVAL_MS
+from ..intervals import INTERVALS as SHARED_INTERVALS
 from ..money import ZERO, D
 from ..types import Candle, InstrumentSpec, Position, Side, SizedOrder
 from .base import BrokerError, OrderReceipt, require_positive
@@ -40,23 +42,9 @@ DEFAULT_MIN_NOTIONAL = D(500)
 #: a number a billion times too big.
 IMPLAUSIBLE_PRICE = D(10) ** 12
 
-INTERVALS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w")
+INTERVALS = SHARED_INTERVALS
 
-_INTERVAL_MS = {
-    "1m": 60_000,
-    "3m": 180_000,
-    "5m": 300_000,
-    "15m": 900_000,
-    "30m": 1_800_000,
-    "1h": 3_600_000,
-    "2h": 7_200_000,
-    "4h": 14_400_000,
-    "8h": 28_800_000,
-    "12h": 43_200_000,
-    "1d": 86_400_000,
-    "3d": 259_200_000,
-    "1w": 604_800_000,
-}
+_INTERVAL_MS = INTERVAL_MS
 
 _PRICE_KEYS = ("mark_price", "markPrice", "last", "last_price", "lastPrice", "index_price")
 
@@ -118,9 +106,16 @@ def read_instrument(
 ) -> InstrumentSpec:
     """Build an :class:`InstrumentSpec` from a ``fetch_market`` reply.
 
-    GRVT publishes ``tick_size``, ``min_size`` and ``base_decimals``; the lot
-    step is ``10 ** -base_decimals``. It does not publish a minimum order
-    *value*, so that stays at the configured fallback.
+    **The size step is ``min_size``, not ``10 ** -base_decimals``.**  GRVT
+    publishes both, and they disagree: BTC_USDT_Perp reports
+    ``base_decimals: 9`` and ``min_size: "0.001"``, and an order sized to
+    nine decimals is refused with ``2065 Order size too granular``.  Measured
+    against GRVT testnet on 13 Nov 2026, with a real rejected order.
+    ``base_decimals`` describes how the number is *encoded*; ``min_size`` is
+    what the matching engine will take.
+
+    ``min_notional`` is published too, and is read: the configured fallback
+    is only used when the venue says nothing.
     """
     try:
         raise_for_error(payload, f"instrument {symbol}")
@@ -130,20 +125,15 @@ def read_instrument(
 
     tick = body.get("tick_size") or body.get("tickSize")
     min_size = body.get("min_size") or body.get("minSize")
-    base_decimals = body.get("base_decimals", body.get("baseDecimals"))
-    lot = None
-    if base_decimals not in (None, ""):
-        try:
-            lot = Decimal(1).scaleb(-int(base_decimals))
-        except (TypeError, ValueError):
-            lot = None
+    min_notional = body.get("min_notional") or body.get("minNotional")
 
     try:
         return InstrumentSpec.build(
             symbol,
             tick_size=tick if tick else fallback.tick_size,
-            lot_step=lot if lot else fallback.lot_step,
-            min_notional=fallback.min_notional,
+            # The step the engine accepts, which is the minimum size itself.
+            lot_step=min_size if min_size else fallback.lot_step,
+            min_notional=min_notional if min_notional else fallback.min_notional,
             max_leverage=body.get("max_leverage") or fallback.max_leverage,
             # GRVT prices follow a plain tick; no significant-figure rule.
             price_sig_figs=0,
@@ -312,6 +302,9 @@ class GrvtBroker:
     """
 
     name = "grvt"
+    #: Bars GRVT returns per OHLCV call.  Asking for more is not an
+    #: error, it is just quietly truncated, which is worse.
+    max_candles_per_request = 1000
 
     def __init__(
         self,
@@ -327,6 +320,20 @@ class GrvtBroker:
         self._instruments: dict[str, InstrumentSpec] = {}
 
     # --- lifecycle -------------------------------------------------------
+
+    def sdk_log(self) -> logging.Logger:
+        """The logger handed to the exchange SDK.
+
+        A child of ours, kept at WARNING: the SDK narrates every request and
+        every reply at INFO, including the whole order payload, which buries
+        the four lines a person actually watches for - the signal, the
+        approval, the fill and the exit.  Raise it with
+        ``logging.getLogger("tradebot.grvt_sdk").setLevel(logging.INFO)``
+        when a connection needs debugging.
+        """
+        sdk = self.log.getChild("grvt_sdk")
+        sdk.setLevel(logging.WARNING)
+        return sdk
 
     def connect(self) -> None:
         if self.client is not None:
@@ -345,7 +352,7 @@ class GrvtBroker:
         try:
             self.client = GrvtCcxt(
                 GrvtEnv(self.settings.env),
-                self.log,
+                self.sdk_log(),
                 parameters={
                     "api_key": self.settings.api_key.reveal(),
                     "trading_account_id": self.settings.trading_account_id.reveal(),
@@ -419,6 +426,26 @@ class GrvtBroker:
         payload = self._require_client().fetch_ohlcv(symbol, interval, since, limit + 1)
         candles = read_candles(payload, symbol, interval)
         return candles[-limit:] if limit else candles
+
+    def fetch_candles_range(
+        self, symbol: str, interval: str, start: datetime, end: datetime
+    ) -> list[Candle]:
+        """One page of history starting at *start*, for the downloader.
+
+        The venue decides how many bars a page holds, so this returns what it
+        gave rather than what was asked for; walking the pages is
+        :func:`tradebot.data.fetch.download` job.
+        """
+        if interval not in _INTERVAL_MS:
+            raise BrokerError(f"interval must be one of {', '.join(INTERVALS)}, got {interval!r}")
+        if end <= start:
+            return []
+        since = int(start.timestamp() * 1000)
+        payload = self._require_client().fetch_ohlcv(
+            symbol, interval, since, self.max_candles_per_request
+        )
+        candles = read_candles(payload, symbol, interval)
+        return [c for c in candles if start <= c.open_time < end]
 
     # --- writes ----------------------------------------------------------
 

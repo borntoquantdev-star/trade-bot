@@ -5,7 +5,7 @@
   "description": "หน้าดูการทำงานของบอทแบบ realtime โดยอ่าน logs/audit.jsonl ที่บอทเขียนไว้",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/pipeline.test.js test/tail.test.js test/server.test.js"
+    "test": "node --test test/pipeline.test.js test/tail.test.js test/backtest.test.js test/server.test.js"
   },
   "engines": {
     "node": ">=18"

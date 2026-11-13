@@ -16,6 +16,7 @@ from tradebot.core.config import (
     describe,
     load_config,
     raw_defaults,
+    read_env_file,
 )
 from tradebot.money import D
 
@@ -369,3 +370,68 @@ def test_the_shipped_example_config_loads_as_is():
     assert config.exchange in ("grvt", "hyperliquid")
     with pytest.raises(ConfigError):
         config.require_live_credentials()
+
+
+# --- keys from a .env file ---------------------------------------------------
+
+
+def test_a_key_in_a_dot_env_beside_the_config_is_found(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text(
+        "# the file a student is told to make\n"
+        "GRVT_API_KEY=key-from-file\n"
+        'GRVT_PRIVATE_KEY="quoted-secret"\n'
+        "export GRVT_TRADING_ACCOUNT_ID=12345\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "exchange: grvt\n"
+        "grvt:\n"
+        "  env: testnet\n"
+        "  api_key: ${GRVT_API_KEY}\n"
+        "  private_key: ${GRVT_PRIVATE_KEY}\n"
+        "  trading_account_id: ${GRVT_TRADING_ACCOUNT_ID}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(path=str(config_path), env={})
+    assert config.grvt.api_key.reveal() == "key-from-file"
+    assert config.grvt.private_key.reveal() == "quoted-secret"
+    # It is a Secret too: the prefix is stripped and the value survives.
+    assert config.grvt.trading_account_id.reveal() == "12345"
+
+
+def test_the_real_environment_beats_the_file(tmp_path, monkeypatch):
+    # A server that sets the variable must not be overridden by a stale file
+    # somebody left in the repository.
+    (tmp_path / ".env").write_text("GRVT_API_KEY=from-file\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "exchange: grvt\ngrvt:\n  env: testnet\n  api_key: ${GRVT_API_KEY}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(path=str(config_path), env={"GRVT_API_KEY": "from-the-environment"})
+    assert config.grvt.api_key.reveal() == "from-the-environment"
+
+
+def test_no_dot_env_anywhere_is_not_an_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert read_env_file(None) == {}
+
+
+def test_lines_that_are_not_assignments_are_skipped(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text(
+        "\n# a comment\nnonsense line\nGOOD=yes\n   \n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert read_env_file(None) == {"GOOD": "yes"}
+
+
+def test_a_value_with_an_equals_sign_in_it_survives(tmp_path, monkeypatch):
+    # Base64 secrets end in '=' often enough that this is not hypothetical.
+    (tmp_path / ".env").write_text("SECRET=abc==\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert read_env_file(None) == {"SECRET": "abc=="}

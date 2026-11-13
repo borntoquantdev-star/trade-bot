@@ -4,8 +4,13 @@
  * transform เดียวบน layer, การ์ดวางด้วย absolute position, เส้นต่อเป็น SVG ใน
  * layer เดียวกันจึงขยับตามกล้องเอง, ตำแหน่งการ์ดเก็บลง localStorage
  *
- * ไม่มีไลบรารี ไม่มี build step  ตรรกะการแปลงข้อมูลอยู่ใน lib/pipeline.js ทั้งหมด
- * ไฟล์นี้ทำแค่เรื่องการวาดกับการโต้ตอบ
+ * มีสองหน้าอยู่บนแคนวาสเดียวกัน สลับด้วยแท็บบนแถบบน:
+ *   live      สิ่งที่บอทกำลังทำ อ่านจาก logs/audit.jsonl + state.json
+ *   backtest  ผลการทดสอบย้อนหลัง อ่านจาก logs/backtest.json
+ * แต่ละหน้าจำผังการ์ดกับตำแหน่งกล้องของตัวเองแยกกัน เพราะจัดจอไว้คนละแบบ
+ *
+ * ไม่มีไลบรารี ไม่มี build step  ตรรกะการแปลงข้อมูลอยู่ใน lib/ ทั้งหมด
+ * (pipeline.js กับ backtest.js) ไฟล์นี้ทำแค่เรื่องการวาดกับการโต้ตอบ
  */
 
 (function () {
@@ -13,8 +18,9 @@
 
   const $ = (id) => document.getElementById(id);
   const SVG = "http://www.w3.org/2000/svg";
-  const LAYOUT_KEY = "tradebot.canvas.layout.v1";
-  const CAMERA_KEY = "tradebot.canvas.camera.v1";
+  const LAYOUT_KEY = "tradebot.canvas.layout.v2";
+  const CAMERA_KEY = "tradebot.canvas.camera.v2";
+  const PAGE_KEY = "tradebot.canvas.page.v1";
 
   const STATE_TH = {
     idle: "รอ",
@@ -25,50 +31,174 @@
     error: "ผิดพลาด",
   };
 
-  /* ---------- ผังเริ่มต้นของการ์ด ---------- */
+  /* ---------- เครื่องมือจัดรูปตัวเลข ---------- */
 
-  const DEFAULT_LAYOUT = {
-    market: { x: 60, y: 140, w: 290, h: 180 },
-    strategy: { x: 392, y: 140, w: 290, h: 180 },
-    gate: { x: 724, y: 140, w: 290, h: 180 },
-    broker: { x: 1056, y: 140, w: 290, h: 180 },
-    position: { x: 1388, y: 140, w: 290, h: 180 },
-    chart: { x: 60, y: 400, w: 622, h: 300 },
-    account: { x: 724, y: 400, w: 290, h: 300 },
-    log: { x: 1056, y: 400, w: 622, h: 440 },
+  const fmt = (v, d) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "-";
+    return n.toLocaleString("en-US", {
+      minimumFractionDigits: d === undefined ? 0 : d,
+      maximumFractionDigits: d === undefined ? 2 : d,
+    });
+  };
+  const signed = (v, d) => (Number(v) >= 0 ? "+" : "") + fmt(v, d);
+  /** null จาก lib/backtest.js แปลว่า "วัดไม่ได้" ไม่ใช่ศูนย์ ห้ามพิมพ์เป็น 0 */
+  const measured = (v, d, suffix) =>
+    v === null || v === undefined ? "วัดไม่ได้" : fmt(v, d) + (suffix || "");
+  const pct = (v, d) => fmt(v, d === undefined ? 2 : d) + "%";
+  const signedPct = (v, d) => signed(v, d === undefined ? 2 : d) + "%";
+  const sign = (v) => (Number(v) > 0 ? "pos" : Number(v) < 0 ? "neg" : "");
+  const clock = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? String(iso).slice(11, 19)
+      : d.toLocaleTimeString("th-TH", { hour12: false });
+  };
+  /** วันที่แบบ ISO ไม่ต้องเดาว่าผู้ใช้อยากได้ พ.ศ. หรือ ค.ศ. */
+  const day = (iso) => String(iso || "").slice(0, 10);
+
+  function el(tag, attrs, ...kids) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === "class") node.className = v;
+      else if (k === "text") node.textContent = v;
+      else if (v !== null && v !== undefined) node.setAttribute(k, v);
+    }
+    for (const kid of kids) if (kid) node.append(kid);
+    return node;
+  }
+
+  const kpi = (k, value, note, cls) =>
+    el(
+      "div",
+      { class: "kpi" },
+      el("div", { class: "k", text: k }),
+      el("div", { class: "v " + (cls || ""), text: value }),
+      el("div", { class: "n", text: note || "" })
+    );
+
+  const rowsCard = (...pairs) => el("div", { class: "kpis" }, ...pairs);
+
+  const hint = (...lines) =>
+    el("div", { class: "hint-empty" }, ...lines.map((line) =>
+      line.code ? el("code", { text: line.code }) : el("div", { text: line })
+    ));
+
+  /* ---------- หน้า live ---------- */
+
+  const LIVE_STAGE_IDS = ["market", "strategy", "gate", "broker", "position"];
+
+  const LIVE = {
+    label: "live",
+    layout: {
+      market: { x: 60, y: 140, w: 290, h: 180 },
+      strategy: { x: 392, y: 140, w: 290, h: 180 },
+      gate: { x: 724, y: 140, w: 290, h: 180 },
+      broker: { x: 1056, y: 140, w: 290, h: 180 },
+      position: { x: 1388, y: 140, w: 290, h: 180 },
+      chart: { x: 60, y: 400, w: 622, h: 300 },
+      account: { x: 724, y: 400, w: 290, h: 300 },
+      log: { x: 1056, y: 400, w: 622, h: 440 },
+    },
+    titles: { chart: "ราคาที่บอทเห็น", account: "บัญชี", log: "การตัดสินใจล่าสุด" },
+    group: {
+      ids: LIVE_STAGE_IDS,
+      label: (v) =>
+        v
+          ? `PIPELINE · ${v.counts.ticks} รอบ · ${v.counts.orders} ออเดอร์ · ${v.counts.rejects} ปฏิเสธ`
+          : "PIPELINE · สายการทำงานของบอท",
+    },
+    wires: [
+      ["market", "strategy"],
+      ["strategy", "gate"],
+      ["gate", "broker"],
+      ["broker", "position"],
+      ["market", "chart"],
+      ["account", "gate"],
+      ["broker", "log"],
+    ],
+    paint: paintLive,
+    chrome: chromeLive,
   };
 
-  // ขั้นในสายโซ่ (อยู่ในกรอบ group) กับการ์ดข้อมูลรอบๆ
-  const STAGE_IDS = ["market", "strategy", "gate", "broker", "position"];
-  const PANEL_TITLE = { chart: "ราคาที่บอทเห็น", account: "บัญชี", log: "การตัดสินใจล่าสุด" };
+  /* ---------- หน้า backtest ---------- */
 
-  const WIRES = [
-    ["market", "strategy"],
-    ["strategy", "gate"],
-    ["gate", "broker"],
-    ["broker", "position"],
-    ["market", "chart"],
-    ["account", "gate"],
-    ["broker", "log"],
-  ];
+  const BACKTEST = {
+    label: "backtest",
+    layout: {
+      btResult: { x: 60, y: 140, w: 430, h: 360 },
+      btHold: { x: 530, y: 140, w: 300, h: 250 },
+      btRisk: { x: 870, y: 140, w: 320, h: 360 },
+      btQuality: { x: 1230, y: 140, w: 320, h: 400 },
+      btEquity: { x: 60, y: 540, w: 770, h: 330 },
+      btTrades: { x: 870, y: 580, w: 680, h: 590 },
+      btGate: { x: 60, y: 910, w: 370, h: 260 },
+      btNotes: { x: 470, y: 910, w: 360, h: 260 },
+    },
+    titles: {
+      btResult: "ผลการทดสอบ",
+      btHold: "เทียบกับไม่ทำอะไร",
+      btRisk: "ความเสี่ยงที่ต้องทน",
+      btQuality: "คุณภาพของไม้",
+      btEquity: "เส้นทุน",
+      btTrades: "ไม้ที่ปิดแล้ว",
+      btGate: "ด่านความเสี่ยงปฏิเสธอะไร",
+      btNotes: "อ่านก่อนเชื่อผลนี้",
+    },
+    group: {
+      ids: ["btResult", "btHold", "btRisk", "btQuality"],
+      label: (v) =>
+        v && v.present
+          ? `สรุปผล · ${v.head.strategy} บน ${v.head.symbol} ${v.head.interval}`
+          : "สรุปผล · ยังไม่มีผลการทดสอบ",
+    },
+    // ทางที่ตัวเลขเดิน: ด่าน -> ไม้ -> เส้นทุน -> ผลลัพธ์ -> เทียบกับการอยู่เฉย
+    wires: [
+      ["btGate", "btTrades"],
+      ["btTrades", "btEquity"],
+      ["btEquity", "btResult"],
+      ["btResult", "btHold"],
+      ["btEquity", "btRisk"],
+      ["btTrades", "btQuality"],
+    ],
+    paint: paintBacktest,
+    chrome: chromeBacktest,
+  };
+
+  const PAGES = { live: LIVE, backtest: BACKTEST };
 
   /* ---------- สถานะหน้าจอ ---------- */
 
-  let layout = loadLayout();
-  let camera = loadCamera();
-  let view = null;
+  let pageId = loadPage();
+  let page = PAGES[pageId];
+  let layout = loadLayout(pageId);
+  let camera = loadCamera(pageId);
+  const views = { live: null, backtest: null };
+  let cardStates = {};
   let paused = false;
   let wiresOn = true;
-  const cards = new Map(); // id -> { el, body }
+  const cards = new Map(); // id -> { el, body, head }
 
-  function loadLayout() {
+  function loadPage() {
     try {
-      const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+      const saved = localStorage.getItem(PAGE_KEY);
+      if (saved && PAGES[saved]) return saved;
+    } catch {
+      /* ignore */
+    }
+    return "live";
+  }
+
+  function loadLayout(id) {
+    const defaults = PAGES[id].layout;
+    try {
+      const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY + "." + id));
       if (saved && typeof saved === "object") {
         const merged = {};
-        for (const [id, box] of Object.entries(DEFAULT_LAYOUT)) {
-          const s = saved[id];
-          merged[id] =
+        for (const [key, box] of Object.entries(defaults)) {
+          const s = saved[key];
+          merged[key] =
             s && Number.isFinite(s.x) && Number.isFinite(s.y)
               ? { ...box, x: s.x, y: s.y, w: s.w || box.w, h: s.h || box.h }
               : { ...box };
@@ -78,20 +208,20 @@
     } catch {
       /* เก็บไม่ได้ก็ใช้ค่าเริ่มต้น */
     }
-    return JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+    return JSON.parse(JSON.stringify(defaults));
   }
 
   const saveLayout = () => {
     try {
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+      localStorage.setItem(LAYOUT_KEY + "." + pageId, JSON.stringify(layout));
     } catch {
       /* โหมดส่วนตัวบางแบบเขียนไม่ได้ */
     }
   };
 
-  function loadCamera() {
+  function loadCamera(id) {
     try {
-      const saved = JSON.parse(localStorage.getItem(CAMERA_KEY));
+      const saved = JSON.parse(localStorage.getItem(CAMERA_KEY + "." + id));
       if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.scale)) return saved;
     } catch {
       /* ignore */
@@ -101,7 +231,8 @@
 
   const saveCamera = () => {
     try {
-      localStorage.setItem(CAMERA_KEY, JSON.stringify(camera));
+      localStorage.setItem(CAMERA_KEY + "." + pageId, JSON.stringify(camera));
+      localStorage.setItem(PAGE_KEY, pageId);
     } catch {
       /* ignore */
     }
@@ -152,27 +283,16 @@
 
   /* ---------- สร้างการ์ด ---------- */
 
-  function el(tag, attrs, ...kids) {
-    const node = document.createElement(tag);
-    for (const [k, v] of Object.entries(attrs || {})) {
-      if (k === "class") node.className = v;
-      else if (k === "text") node.textContent = v;
-      else if (v !== null && v !== undefined) node.setAttribute(k, v);
-    }
-    for (const kid of kids) if (kid) node.append(kid);
-    return node;
-  }
-
   function buildCards() {
     const host = $("nodes");
     host.replaceChildren();
     cards.clear();
-    for (const id of Object.keys(DEFAULT_LAYOUT)) {
+    for (const id of Object.keys(page.layout)) {
       const head = el(
         "div",
         { class: "node-head" },
         el("span", { class: "tag" }),
-        el("span", { class: "title", text: PANEL_TITLE[id] || id }),
+        el("span", { class: "title", text: page.titles[id] || id }),
         el("span", { class: "state" })
       );
       const body = el("div", { class: "node-body" });
@@ -192,9 +312,9 @@
     card.style.height = box.h + "px";
   }
 
-  /** กรอบ group ล้อมเฉพาะการ์ดในสายโซ่ */
+  /** กรอบ group ล้อมเฉพาะการ์ดที่หน้านั้นบอกว่าเป็นกลุ่มหลัก */
   function positionGroup() {
-    const boxes = STAGE_IDS.map((id) => layout[id]);
+    const boxes = page.group.ids.map((id) => layout[id]);
     const pad = 22;
     const x = Math.min(...boxes.map((b) => b.x)) - pad;
     const y = Math.min(...boxes.map((b) => b.y)) - pad;
@@ -205,6 +325,17 @@
     group.style.top = y + "px";
     group.style.width = r - x + "px";
     group.style.height = b - y + "px";
+  }
+
+  /** ตั้งหัวการ์ดกับสีขอบ แล้วจำสถานะไว้ให้มินิแมปและเส้นต่อใช้ */
+  function setCard(id, state, stateText) {
+    const card = cards.get(id);
+    if (!card) return null;
+    card.el.className = "node " + state;
+    card.head.querySelector(".state").textContent =
+      stateText === undefined ? STATE_TH[state] || state : stateText;
+    cardStates[id] = state;
+    return card;
   }
 
   /* ---------- ลากการ์ด ---------- */
@@ -284,7 +415,7 @@
     svg.setAttribute("width", box.x + box.w + 400);
     svg.setAttribute("height", box.y + box.h + 400);
 
-    for (const [from, to] of WIRES) {
+    for (const [from, to] of page.wires) {
       const a = layout[from];
       const b = layout[to];
       const horizontal = Math.abs(b.y - a.y) < Math.abs(b.x - a.x);
@@ -323,12 +454,10 @@
     }
   }
 
-  /** เส้นวิ่งเฉพาะช่วงที่ข้อมูลเพิ่งเดินผ่านจริงในรอบล่าสุด */
+  /** เส้นวิ่งเฉพาะช่วงที่ข้อมูลเดินผ่านจริง */
   function isFlowing(from, to) {
-    if (!view) return false;
-    const stateOf = (id) => (view.nodes.find((n) => n.id === id) || {}).state;
-    const a = stateOf(from);
-    const b = stateOf(to);
+    const a = cardStates[from];
+    const b = cardStates[to];
     if (!a) return false;
     return a === "ready" && b !== undefined && b !== "idle";
   }
@@ -343,8 +472,7 @@
 
     for (const [id, b] of Object.entries(layout)) {
       const rect = document.createElementNS(SVG, "rect");
-      const state = view ? (view.nodes.find((n) => n.id === id) || {}).state : null;
-      rect.setAttribute("class", "mm-node " + (state || ""));
+      rect.setAttribute("class", "mm-node " + (cardStates[id] || ""));
       rect.setAttribute("x", b.x);
       rect.setAttribute("y", b.y);
       rect.setAttribute("width", b.w);
@@ -363,62 +491,32 @@
     svg.append(viewRect);
   }
 
-  /* ---------- วาดเนื้อหาลงการ์ด ---------- */
+  /* ---------- หน้า live: วาดเนื้อหา ---------- */
 
-  const fmt = (v, d) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "-";
-    return n.toLocaleString("en-US", {
-      minimumFractionDigits: d === undefined ? 0 : d,
-      maximumFractionDigits: d === undefined ? 2 : d,
-    });
-  };
-  const clock = (iso) => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? String(iso).slice(11, 19) : d.toLocaleTimeString("th-TH", { hour12: false });
-  };
-
-  function paintStages(v) {
+  function paintLive(v) {
     for (const node of v.nodes) {
-      const card = cards.get(node.id);
+      const card = setCard(node.id, node.state);
       if (!card) continue;
-      card.el.className = "node " + node.state;
       card.head.querySelector(".title").textContent = node.label;
-      card.head.querySelector(".state").textContent = STATE_TH[node.state] || node.state;
       card.body.replaceChildren(
         el("div", { class: "stage-metric", text: node.metric || "" }),
         el("div", { class: "stage-detail", text: node.detail }),
         el("div", { class: "stage-sub", text: node.sub })
       );
     }
+    paintLiveAccount(v);
+    paintLiveChart(v);
+    paintLiveLog(v);
   }
 
-  function paintAccount(v) {
+  function paintLiveAccount(v) {
     const a = v.account;
-    const card = cards.get("account");
-    card.el.className = "node " + (a.halted ? "blocked" : "ready");
-    card.head.querySelector(".state").textContent = a.halted ? "หยุดอยู่" : "ปกติ";
-    const kpi = (k, val, note, cls) =>
-      el(
-        "div",
-        { class: "kpi" },
-        el("div", { class: "k", text: k }),
-        el("div", { class: "v " + (cls || ""), text: val }),
-        el("div", { class: "n", text: note || "" })
-      );
+    const card = setCard("account", a.halted ? "blocked" : "ready", a.halted ? "หยุดอยู่" : "ปกติ");
     card.body.replaceChildren(
-      el(
-        "div",
-        { class: "kpis" },
+      rowsCard(
         kpi("ทุน", fmt(a.equity, 2), a.day || ""),
-        kpi(
-          "วันนี้",
-          (a.dayPnl >= 0 ? "+" : "") + fmt(a.dayPnl, 2),
-          (a.dayPnlPct >= 0 ? "+" : "") + fmt(a.dayPnlPct, 2) + "%",
-          a.dayPnl > 0 ? "pos" : a.dayPnl < 0 ? "neg" : ""
-        ),
-        kpi("ห่างจากพีค", fmt(a.drawdownPct, 2) + "%", "peak " + fmt(a.peak, 2)),
+        kpi("วันนี้", signed(a.dayPnl, 2), signedPct(a.dayPnlPct), sign(a.dayPnl)),
+        kpi("ห่างจากพีค", pct(a.drawdownPct), "peak " + fmt(a.peak, 2)),
         kpi("รอบที่ตรวจ", fmt(v.counts.ticks), "สัญญาณ " + v.counts.signals),
         kpi("ออเดอร์", fmt(v.counts.orders), "ส่งแล้ว " + a.sentOrders),
         kpi("ถูกปฏิเสธ", fmt(v.counts.rejects), v.counts.errors ? "ผิดพลาด " + v.counts.errors : "")
@@ -426,16 +524,12 @@
     );
   }
 
-  function paintChart(v) {
-    const card = cards.get("chart");
+  function paintLiveChart(v) {
     const points = v.chart;
-    card.el.className = "node " + (points.length ? "ready" : "idle");
-    card.head.querySelector(".state").textContent = points.length ? points.length + " จุด" : "รอ";
+    const card = setCard("chart", points.length ? "ready" : "idle", points.length ? points.length + " จุด" : "รอ");
 
     if (!points.length) {
-      card.body.replaceChildren(
-        el("div", { class: "hint-empty", text: "ยังไม่มีราคา — บอทยังไม่ได้เขียน audit trail" })
-      );
+      card.body.replaceChildren(hint("ยังไม่มีราคา — บอทยังไม่ได้เขียน audit trail"));
       return;
     }
 
@@ -483,19 +577,15 @@
     );
   }
 
-  function paintLog(v) {
-    const card = cards.get("log");
-    card.el.className = "node " + (v.log.length ? "ready" : "idle");
-    card.head.querySelector(".state").textContent = v.log.length ? v.log.length + " รายการ" : "ว่าง";
+  function paintLiveLog(v) {
+    const card = setCard("log", v.log.length ? "ready" : "idle", v.log.length ? v.log.length + " รายการ" : "ว่าง");
 
     if (!v.log.length) {
       card.body.replaceChildren(
-        el(
-          "div",
-          { class: "hint-empty" },
-          el("div", { text: "ยังไม่มีการตัดสินใจที่น่าบันทึก" }),
-          el("div", { text: "ลองรันบอทแบบกระดาษ แล้วหน้านี้จะขยับเอง" }),
-          el("code", { text: "tradebot --dry-run --paper-walk --iterations 60" })
+        hint(
+          "ยังไม่มีการตัดสินใจที่น่าบันทึก",
+          "ลองรันบอทแบบกระดาษ แล้วหน้านี้จะขยับเอง",
+          { code: "tradebot --dry-run --paper-walk --iterations 60" }
         )
       );
       return;
@@ -523,30 +613,435 @@
     );
   }
 
-  function paint(v) {
-    view = v;
+  function chromeLive(v) {
     $("pillSymbol").textContent = v.symbol || "—";
-
-    const simulated = v.nodes.find((n) => n.id === "broker");
-    const isPaper = !simulated || simulated.metric !== "live";
+    const broker = v.nodes.find((n) => n.id === "broker");
+    const isPaper = !broker || broker.metric !== "live";
     const mode = $("pillMode");
     mode.className = "pill" + (isPaper ? "" : " live-real");
     mode.querySelector("span").textContent = isPaper ? "paper" : "LIVE";
 
     $("halt").hidden = !v.account.halted;
     $("haltReason").textContent = v.account.haltReason || "ไม่ได้บันทึกเหตุผล";
-    $("groupLabel").textContent =
-      `PIPELINE · ${v.counts.ticks} รอบ · ${v.counts.orders} ออเดอร์ · ${v.counts.rejects} ปฏิเสธ`;
     $("statusLeft").textContent = v.updatedAt
       ? `อัปเดตล่าสุด ${clock(v.updatedAt)} · ${v.counts.ticks} รอบ`
       : "ยังไม่มีข้อมูลจากบอท";
+  }
 
-    paintStages(v);
-    paintAccount(v);
-    paintChart(v);
-    paintLog(v);
+  /* ---------- หน้า backtest: วาดเนื้อหา ---------- */
+
+  const EMPTY_HINT = [
+    "ยังไม่มีไฟล์ผลการทดสอบ",
+    "โหลดแท่งเทียนก่อน แล้วค่อยรันย้อนหลัง (ไม่ต้องมีคีย์ ไม่ต่อเน็ตตอนรัน)",
+    { code: "tradebot --fetch-candles --days 365" },
+    { code: "tradebot --backtest --days 365" },
+  ];
+
+  function paintBacktest(v) {
+    if (!v.present) {
+      for (const id of Object.keys(page.layout)) {
+        const card = setCard(id, "idle", "ว่าง");
+        card.body.replaceChildren(
+          id === "btResult" ? hint(...EMPTY_HINT) : hint("รอผลการทดสอบ")
+        );
+      }
+      return;
+    }
+    paintBtResult(v);
+    paintBtHold(v);
+    paintBtRisk(v);
+    paintBtQuality(v);
+    paintBtEquity(v);
+    paintBtTrades(v);
+    paintBtGate(v);
+    paintBtNotes(v);
+  }
+
+  function paintBtResult(v) {
+    const r = v.result;
+    const state = r.netPnl > 0 ? "ready" : r.netPnl < 0 ? "blocked" : "idle";
+    const card = setCard(
+      "btResult",
+      state,
+      r.netPnl > 0 ? "กำไร" : r.netPnl < 0 ? "ขาดทุน" : "เท่าทุน"
+    );
+    card.body.replaceChildren(
+      el(
+        "div",
+        { class: "bt-head" },
+        el("span", { class: "who", text: `${v.head.strategy} · ${v.head.symbol} ${v.head.interval}` }),
+        el("span", {
+          class: "when",
+          text: `${day(v.head.start)} → ${day(v.head.end)} · ${fmt(v.head.bars)} แท่ง` +
+            (v.head.exchange ? ` · ${v.head.exchange}` : ""),
+        })
+      ),
+      rowsCard(
+        kpi("กำไรสุทธิ", signed(r.netPnl, 2), signedPct(r.returnPct), sign(r.netPnl)),
+        kpi("ต่อปี", r.cagrPct === null ? "ช่วงสั้นเกินไป" : signedPct(r.cagrPct),
+          r.cagrPct === null ? "ต้องยาวกว่าราวหนึ่งเดือน" : "ทบต้น", r.cagrPct === null ? "" : sign(r.cagrPct)),
+        kpi("ทุนเริ่ม", fmt(r.startEquity, 2)),
+        kpi("ทุนปลาย", fmt(r.finalEquity, 2)),
+        kpi("ค่าธรรมเนียมที่จ่าย", fmt(r.feesPaid, 2),
+          r.feesPaid > 0 && Math.abs(r.netPnl) > 0
+            ? `เท่ากับ ${pct((r.feesPaid / Math.abs(r.netPnl)) * 100, 0)} ของผลลัพธ์`
+            : ""),
+        kpi("funding", "ไม่ถูกหัก", "ของจริงแพงกว่านี้")
+      )
+    );
+  }
+
+  function paintBtHold(v) {
+    const h = v.hold;
+    const state = h.winner === null ? "idle" : h.winner === "bot" ? "ready" : "blocked";
+    const card = setCard(
+      "btHold",
+      state,
+      h.winner === null ? "เทียบไม่ได้" : h.winner === "bot" ? "บอทชนะ" : "ซื้อถือชนะ"
+    );
+    card.body.replaceChildren(
+      el(
+        "div",
+        { class: "versus" },
+        el("div", { class: "vs-row" + (h.winner === "bot" ? " win" : "") },
+          el("span", { class: "vs-k", text: "บอท" }),
+          el("span", { class: "vs-v " + sign(h.bot), text: signedPct(h.bot) })),
+        el("div", { class: "vs-row" + (h.winner === "hold" ? " win" : "") },
+          el("span", { class: "vs-k", text: "ซื้อแล้วถือเฉยๆ" }),
+          el("span", {
+            class: "vs-v " + (h.hold === null ? "" : sign(h.hold)),
+            text: h.hold === null ? "วัดไม่ได้" : signedPct(h.hold),
+          }))
+      ),
+      el("div", {
+        class: "stage-detail",
+        text:
+          h.winner === null
+            ? "ไม่มีราคาต้นและปลายช่วงให้เทียบ"
+            : h.winner === "bot"
+              ? "บอทชนะการอยู่เฉย — ยังไม่ได้แปลว่ามันจะชนะช่วงอื่น"
+              : "เครื่องจักรทั้งหมดนี้แพ้การนั่งเฉยๆ",
+      })
+    );
+  }
+
+  function paintBtRisk(v) {
+    const r = v.risk;
+    // ไม่ตั้งเพดานเอาเองว่า drawdown เท่าไรถึงเรียกว่าแย่ — เป็นข้อมูล ไม่ใช่คำตัดสิน
+    const card = setCard("btRisk", v.gate.halted ? "blocked" : "wip", pct(r.maxDrawdownPct));
+    card.body.replaceChildren(
+      rowsCard(
+        kpi("ขาดทุนจากพีคสูงสุด", fmt(r.maxDrawdown, 2), pct(r.maxDrawdownPct), "neg"),
+        kpi("เวลาใต้พีค", fmt(r.daysUnderwater, 1) + " วัน", fmt(r.barsUnderwater) + " แท่ง"),
+        kpi(
+          "เดือนแย่สุด",
+          r.worstMonth ? signedPct(r.worstMonth.returnPct) : "-",
+          r.worstMonth ? r.worstMonth.month : "",
+          r.worstMonth ? sign(r.worstMonth.returnPct) : ""
+        ),
+        kpi("แพ้ติดกันสูงสุด", fmt(r.longestLosingStreak) + " ไม้"),
+        kpi("เวลาที่ถือของ", pct(r.exposurePct), "ของทุกแท่ง"),
+        kpi("เดือนที่วัดได้", fmt(v.monthly.length))
+      )
+    );
+  }
+
+  function paintBtQuality(v) {
+    const q = v.quality;
+    const state =
+      q.trades === 0 ? "idle" : v.thin ? "wip" : q.expectancyR > 0 ? "ready" : "blocked";
+    const card = setCard(
+      "btQuality",
+      state,
+      q.trades === 0 ? "ไม่มีไม้" : v.thin ? "ตัวอย่างบาง" : fmt(q.trades) + " ไม้"
+    );
+
+    if (q.trades === 0) {
+      card.body.replaceChildren(
+        hint(v.noTrades || "การทดสอบนี้ไม่ได้เปิดไม้เลย")
+      );
+      return;
+    }
+
+    card.body.replaceChildren(
+      rowsCard(
+        kpi("อัตราชนะ", pct(q.winRatePct), `${q.wins} ชนะ / ${q.losses} แพ้`),
+        kpi("ชนะเฉลี่ย ÷ แพ้เฉลี่ย", measured(q.winLossRatio, 2), "อ่านคู่กับอัตราชนะเท่านั้น"),
+        kpi("expectancy", signed(q.expectancyR, 2) + "R", "ต่อไม้", sign(q.expectancyR)),
+        kpi("profit factor", measured(q.profitFactor, 2), "กำไรรวม ÷ ขาดทุนรวม"),
+        kpi("sharpe / sortino", `${measured(q.sharpe, 2)} / ${measured(q.sortino, 2)}`),
+        kpi("ไม้ต่อปี", fmt(q.tradesPerYear, 1)),
+        kpi(
+          "ตัดไม้ดีสุด 2 ไม้",
+          signed(q.withoutBestTwo, 2),
+          q.restsOnTwo ? "ผลนี้ยืนอยู่บนสองไม้" : "",
+          q.restsOnTwo ? "neg" : sign(q.withoutBestTwo)
+        ),
+        kpi("ดีสุด / แย่สุด", `${signed(v.trades.best, 2)} / ${signed(v.trades.worst, 2)}`)
+      )
+    );
+  }
+
+  /** กราฟเส้นทุน พร้อมแรเงาช่วงที่อยู่ใต้พีคเดิม */
+  function paintBtEquity(v) {
+    const points = v.curve.points;
+    const card = setCard(
+      "btEquity",
+      points.length ? "ready" : "idle",
+      points.length ? `${fmt(v.curve.kept)} จาก ${fmt(v.curve.total)} จุด` : "ว่าง"
+    );
+
+    if (!points.length) {
+      card.body.replaceChildren(hint("ไม่มีเส้นทุน — การทดสอบนี้ไม่มีแท่งให้เดิน"));
+      return;
+    }
+
+    const w = 740;
+    const h = 220;
+    const pad = 10;
+    const base = v.result.startEquity;
+    const values = points.map((p) => p.equity);
+    const min = Math.min(...values, base);
+    const max = Math.max(...values, base);
+    const span = max - min || 1;
+    const X = (i) => (i / Math.max(1, points.length - 1)) * w;
+    const Y = (val) => h - pad - ((val - min) / span) * (h - pad * 2);
+
+    // พีคที่เดินไปข้างหน้า: ช่องว่างระหว่างพีคกับเส้นทุนคือ drawdown ที่ต้องนั่งทน
+    const peaks = [];
+    let running = -Infinity;
+    for (const p of points) {
+      running = Math.max(running, p.equity);
+      peaks.push(running);
+    }
+
+    const line = points.map((p, i) => `${X(i).toFixed(1)},${Y(p.equity).toFixed(1)}`).join(" ");
+    const down = v.result.finalEquity < base;
+
+    const svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("class", "spark equity" + (down ? " down" : ""));
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+
+    // ขอบบนคือเส้นพีค ขอบล่างคือเส้นทุนย้อนกลับ ที่เหลือคือรูปของ drawdown
+    const top = peaks.map((peak, i) => `${X(i).toFixed(1)},${Y(peak).toFixed(1)}`);
+    const bottom = points
+      .map((p, i) => `${X(i).toFixed(1)},${Y(p.equity).toFixed(1)}`)
+      .reverse();
+    const under = document.createElementNS(SVG, "polygon");
+    under.setAttribute("class", "under");
+    under.setAttribute("points", top.concat(bottom).join(" "));
+    svg.append(under);
+
+    const baseLine = document.createElementNS(SVG, "line");
+    baseLine.setAttribute("class", "base");
+    baseLine.setAttribute("x1", 0);
+    baseLine.setAttribute("x2", w);
+    baseLine.setAttribute("y1", Y(base).toFixed(1));
+    baseLine.setAttribute("y2", Y(base).toFixed(1));
+    svg.append(baseLine);
+
+    const poly = document.createElementNS(SVG, "polyline");
+    poly.setAttribute("class", "line");
+    poly.setAttribute("points", line);
+    svg.append(poly);
+
+    const dot = document.createElementNS(SVG, "circle");
+    dot.setAttribute("class", "mark");
+    dot.setAttribute("cx", X(points.length - 1).toFixed(1));
+    dot.setAttribute("cy", Y(points[points.length - 1].equity).toFixed(1));
+    dot.setAttribute("r", 3.5);
+    svg.append(dot);
+
+    card.body.replaceChildren(
+      el(
+        "div",
+        { class: "chart-top" },
+        el("span", { class: "last " + sign(v.result.netPnl), text: fmt(v.result.finalEquity, 2) }),
+        el("span", {
+          class: "range",
+          text: `ต่ำสุด ${fmt(v.curve.min, 2)} · สูงสุด ${fmt(v.curve.max, 2)} · เส้นประ = ทุนเริ่มต้น ${fmt(base, 2)}`,
+        })
+      ),
+      svg,
+      el("div", {
+        class: "stage-sub",
+        text: `แรเงาคือช่วงที่อยู่ใต้พีคเดิม · ${day(v.curve.from)} → ${day(v.curve.to)}`,
+      })
+    );
+  }
+
+  function paintBtTrades(v) {
+    const t = v.trades;
+    const card = setCard(
+      "btTrades",
+      t.rows.length ? "ready" : "idle",
+      t.rows.length ? fmt(t.total) + " ไม้" : "ไม่มีไม้"
+    );
+
+    if (!t.rows.length) {
+      card.body.replaceChildren(
+        hint(
+          v.noTrades || "การทดสอบนี้ไม่ได้เปิดไม้เลย",
+          "ไม่ได้แปลว่าพัง — กลยุทธ์ที่เงียบทั้งปีก็เป็นคำตอบอย่างหนึ่ง"
+        )
+      );
+      return;
+    }
+
+    card.body.replaceChildren(
+      el(
+        "div",
+        { class: "feed" },
+        ...t.rows.map((row) =>
+          el(
+            "div",
+            { class: "trade " + (row.netPnl > 0 ? "win" : row.netPnl < 0 ? "loss" : "flat") },
+            el(
+              "div",
+              { class: "t" },
+              el("div", { text: day(row.entryAt) }),
+              el("div", { class: "cd", text: clock(row.entryAt) })
+            ),
+            el(
+              "div",
+              {},
+              el("div", { class: "ti", text: `${row.side} ${fmt(row.qty, 3)}` }),
+              el("div", {
+                class: "tx",
+                text: `${fmt(row.entryPrice, 2)} → ${fmt(row.exitPrice, 2)} · ${row.exitLabel}`,
+              })
+            ),
+            el("div", { class: "money " + sign(row.netPnl), text: signed(row.netPnl, 2) }),
+            el("div", { class: "r " + sign(row.r), text: measured(row.r, 2) + "R" })
+          )
+        ),
+        t.hidden
+          ? el("div", { class: "stage-sub", text: `(เก่ากว่านี้อีก ${fmt(t.hidden)} ไม้ ไม่ขึ้นจอ)` })
+          : null
+      )
+    );
+  }
+
+  function paintBtGate(v) {
+    const g = v.gate;
+    const state = g.halted ? "blocked" : g.rejectTotal ? "wip" : "idle";
+    const card = setCard(
+      "btGate",
+      state,
+      g.halted ? "หยุดกลางทาง" : g.rejectTotal ? fmt(g.rejectTotal) + " ครั้ง" : "ไม่ปฏิเสธเลย"
+    );
+
+    const kids = [
+      el("div", {
+        class: "stage-detail",
+        text: `กลยุทธ์ออกสัญญาณ ${fmt(g.signals)} ครั้ง · ด่านปฏิเสธ ${fmt(g.rejectTotal)} ครั้ง`,
+      }),
+    ];
+
+    if (g.rejects.length) {
+      const top = g.rejects[0].count || 1;
+      kids.push(
+        el(
+          "div",
+          { class: "bars" },
+          ...g.rejects.map((row) =>
+            el(
+              "div",
+              { class: "bar-row" },
+              el("span", { class: "bar-k", text: row.label }),
+              el("span", { class: "bar-track" }, el("span", {
+                class: "bar-fill",
+                style: `width:${Math.max(3, (row.count / top) * 100)}%`,
+              })),
+              el("span", { class: "bar-v", text: fmt(row.count) })
+            )
+          )
+        )
+      );
+    }
+
+    if (g.unfilled) {
+      kids.push(
+        el("div", {
+          class: "stage-detail",
+          text: `${fmt(g.unfilled)} ออเดอร์ผ่านด่านแล้ว แต่ราคาไม่กลับมาที่ limit จึงไม่ได้ไม้`,
+        })
+      );
+    }
+
+    if (g.halted) {
+      kids.push(
+        el(
+          "div",
+          { class: "halt-inline" },
+          el("div", { class: "ti", text: "บอทจริงจะหยุดตรงนี้" }),
+          el("div", { class: "tx", text: `${day(g.halted.at)} ${clock(g.halted.at)} · ${g.halted.reason}` })
+        )
+      );
+    }
+
+    card.body.replaceChildren(...kids);
+  }
+
+  function paintBtNotes(v) {
+    const card = setCard("btNotes", "wip", v.thin ? "ตัวอย่างบาง" : "ข้อจำกัด");
+    card.body.replaceChildren(
+      el(
+        "ul",
+        { class: "notes" },
+        ...v.warnings.map((w) => el("li", { class: "warn", text: w })),
+        ...v.notes.map((note) => el("li", { text: note }))
+      )
+    );
+  }
+
+  function chromeBacktest(v) {
+    $("pillSymbol").textContent = v.present ? v.head.symbol || "—" : "—";
+    const mode = $("pillMode");
+    mode.className = "pill";
+    mode.querySelector("span").textContent = v.present
+      ? `${v.head.interval} · ${v.head.strategy}`
+      : "ไม่มีผล";
+    // แบนเนอร์ halt เป็นเรื่องของบอทที่รันอยู่จริง ไม่ใช่ของการทดสอบ
+    $("halt").hidden = true;
+    $("statusLeft").textContent = v.present
+      ? `ทดสอบ ${day(v.head.start)} → ${day(v.head.end)} · ${fmt(v.head.bars)} แท่ง · ${fmt(v.trades.total)} ไม้`
+      : "ยังไม่มี logs/backtest.json — รัน tradebot --backtest ก่อน";
+  }
+
+  /* ---------- วาดทั้งหน้า ---------- */
+
+  function render() {
+    const v = views[pageId];
+    cardStates = {};
+    $("groupLabel").textContent = page.group.label(v);
+    if (v) {
+      page.paint(v);
+      page.chrome(v);
+    } else {
+      for (const id of Object.keys(page.layout)) setCard(id, "idle", "รอ");
+      $("statusLeft").textContent = "กำลังต่อ...";
+    }
     drawWires();
     drawMinimap();
+  }
+
+  function switchPage(next) {
+    if (!PAGES[next] || next === pageId) return;
+    saveLayout();
+    saveCamera();
+    pageId = next;
+    page = PAGES[next];
+    layout = loadLayout(next);
+    camera = loadCamera(next);
+    for (const tab of $("tabs").querySelectorAll(".tab")) {
+      tab.classList.toggle("on", tab.dataset.page === next);
+    }
+    buildCards();
+    applyCamera();
+    render();
+    saveCamera();
   }
 
   /* ---------- ต่อ SSE ---------- */
@@ -560,7 +1055,7 @@
   function connect() {
     const source = new EventSource("/api/stream");
     source.addEventListener("open", () => setLive(true, "ต่ออยู่"));
-    source.addEventListener("snapshot", (event) => {
+    const take = (key) => (event) => {
       if (paused) return;
       let data;
       try {
@@ -569,8 +1064,12 @@
         return;
       }
       setLive(true, "ต่ออยู่");
-      paint(data);
-    });
+      views[key] = data;
+      // หน้าที่ไม่ได้เปิดอยู่ก็เก็บไว้ สลับแท็บแล้วไม่ต้องรอรอบถัดไป
+      if (key === pageId) render();
+    };
+    source.addEventListener("snapshot", take("live"));
+    source.addEventListener("backtest", take("backtest"));
     source.addEventListener("error", () => setLive(false, "หลุด — ต่อใหม่"));
   }
 
@@ -582,11 +1081,15 @@
     $("zoomFit").onclick = fit;
     $("toolFit").onclick = fit;
 
+    for (const tab of $("tabs").querySelectorAll(".tab")) {
+      tab.onclick = () => switchPage(tab.dataset.page);
+    }
+
     $("toolReset").onclick = () => {
-      layout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+      layout = JSON.parse(JSON.stringify(page.layout));
       saveLayout();
       buildCards();
-      if (view) paint(view);
+      render();
       fit();
     };
 
@@ -609,6 +1112,8 @@
       if (event.target.matches("input, textarea")) return;
       if (event.key === "f" || event.key === "F") fit();
       if (event.key === "w" || event.key === "W") $("toolWires").click();
+      if (event.key === "1") switchPage("live");
+      if (event.key === "2") switchPage("backtest");
       if (event.key === " ") {
         event.preventDefault();
         $("toolPause").click();
@@ -627,10 +1132,13 @@
 
   /* ---------- เริ่มทำงาน ---------- */
 
+  for (const tab of $("tabs").querySelectorAll(".tab")) {
+    tab.classList.toggle("on", tab.dataset.page === pageId);
+  }
   buildCards();
   setupPan();
   setupControls();
   applyCamera();
-  drawWires();
+  render();
   connect();
 })();

@@ -21,10 +21,14 @@ const { spawn } = require("node:child_process");
 
 const { readNew, readJson } = require("./lib/tail.js");
 const Pipeline = require("./lib/pipeline.js");
+const Backtest = require("./lib/backtest.js");
 
 const ROOT = path.resolve(__dirname);
 const PUBLIC = path.join(ROOT, "public");
 const PROJECT = path.resolve(ROOT, "..");
+
+/** ไฟล์ตรรกะที่ทั้งเซิร์ฟเวอร์และเบราว์เซอร์ require/โหลดจากที่เดียวกัน */
+const SHARED_LIB = new Set(["lib/pipeline.js", "lib/backtest.js"]);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -43,6 +47,7 @@ Dashboard ของบอท — ดูการทำงานแบบ realtim
   --port <n>     พอร์ต (ค่าตั้งต้น 4317)
   --host <ip>    ค่าตั้งต้น 127.0.0.1 (เปิดเฉพาะในเครื่อง)
   --logs <dir>   โฟลเดอร์ log ของบอท (ค่าตั้งต้น ./logs)
+  --backtest-file <f>  ผลการทดสอบย้อนหลัง (ค่าตั้งต้น <logs>/backtest.json)
   --poll <ms>    ความถี่ตรวจไฟล์ (ค่าตั้งต้น 500)
   --open         เปิดเบราว์เซอร์ให้เลย
   --help
@@ -56,6 +61,8 @@ function parseArgs(argv) {
     port: 4317,
     host: "127.0.0.1",
     logs: path.join(PROJECT, "logs"),
+    // null = ยังไม่ได้ระบุ แล้วค่อยอิงจาก --logs ที่ parse เสร็จแล้ว
+    backtest: null,
     poll: 500,
     open: false,
     help: false,
@@ -76,6 +83,7 @@ function parseArgs(argv) {
     else if (arg === "--port") opts.port = Number(next());
     else if (arg === "--host") opts.host = next();
     else if (arg === "--logs") opts.logs = path.resolve(next());
+    else if (arg === "--backtest-file") opts.backtest = path.resolve(next());
     else if (arg === "--poll") opts.poll = Math.max(100, Number(next()));
     else {
       console.error(`ไม่รู้จักตัวเลือก ${arg} (ลอง --help)`);
@@ -86,6 +94,7 @@ function parseArgs(argv) {
     console.error("--port ต้องเป็นเลขพอร์ตที่ใช้ได้");
     process.exit(2);
   }
+  if (opts.backtest === null) opts.backtest = path.join(opts.logs, "backtest.json");
   return opts;
 }
 
@@ -99,10 +108,21 @@ function createWatcher(opts) {
   let cursor = { offset: 0, partial: "" };
   let state = null;
   let stateStamp = "";
+  let backtest = Backtest.derive(null);
+  let backtestStamp = "";
   const clients = new Set();
 
   function snapshot() {
     return Pipeline.derive({ rows, state });
+  }
+
+  /** ผลการทดสอบย้อนหลัง ย่อจุดเรียบร้อยแล้ว
+   *
+   * ย่อที่นี่ไม่ใช่ที่เบราว์เซอร์ เพราะไฟล์ดิบของการทดสอบ 400 วันบน 5m
+   * ใหญ่ราว 11 MB — ส่งทั้งก้อนผ่าน SSE ทุกครั้งที่ไฟล์เปลี่ยนไม่ไหว
+   */
+  function backtestView() {
+    return backtest;
   }
 
   function send(client, event, data) {
@@ -151,31 +171,67 @@ function createWatcher(opts) {
     }
 
     if (changed) broadcast("snapshot", snapshot());
+    if (pollBacktest()) broadcast("backtest", backtest);
+  }
+
+  /** ไฟล์ผลการทดสอบเปลี่ยนไหม  true = เปลี่ยนแล้ว อ่านใหม่เสร็จแล้ว */
+  function pollBacktest() {
+    let stamp;
+    try {
+      stamp = String(fs.statSync(opts.backtest).mtimeMs);
+    } catch {
+      // ไฟล์หายหรือยังไม่เคยมี
+      if (backtestStamp === "" && !backtest.present) return false;
+      backtest = Backtest.derive(null);
+      backtestStamp = "";
+      return true;
+    }
+    if (stamp === backtestStamp) return false;
+    const raw = readJson(opts.backtest);
+    if (raw === null) {
+      // น่าจะอ่านตอนไฟล์ยังเขียนไม่จบ อย่าทับของเดิมที่ใช้ได้ด้วยคำว่า "ไม่มี"
+      // ไม่จำ stamp ไว้ รอบหน้าจะลองอ่านอีกครั้งเอง
+      return false;
+    }
+    backtestStamp = stamp;
+    backtest = Backtest.derive(raw);
+    return true;
   }
 
   function addClient(res) {
     clients.add(res);
     send(res, "snapshot", snapshot());
-    send(res, "hello", { logs: opts.logs, auditFile, stateFile });
+    send(res, "backtest", backtest);
+    send(res, "hello", {
+      logs: opts.logs,
+      auditFile,
+      stateFile,
+      backtestFile: opts.backtest,
+    });
   }
 
-  return { poll, addClient, removeClient: (res) => clients.delete(res), snapshot, clients };
+  return {
+    poll,
+    addClient,
+    removeClient: (res) => clients.delete(res),
+    snapshot,
+    backtestView,
+    clients,
+  };
 }
 
 function serveStatic(req, res) {
   const rel = req.url === "/" ? "index.html" : decodeURIComponent(req.url.split("?")[0]).slice(1);
-  // หน้าเว็บกับเซิร์ฟเวอร์ใช้ lib/pipeline.js ไฟล์เดียวกัน ไม่คัดลอกให้ซ้ำ
-  const target = rel === "lib/pipeline.js"
-    ? path.join(ROOT, "lib", "pipeline.js")
-    : path.join(PUBLIC, rel);
-  if (target === path.join(ROOT, "lib", "pipeline.js")) {
-    fs.readFile(target, (err, data) => {
+  // หน้าเว็บกับเซิร์ฟเวอร์ใช้ไฟล์ใน lib/ ร่วมกัน ไม่คัดลอกให้ซ้ำ
+  if (SHARED_LIB.has(rel)) {
+    fs.readFile(path.join(ROOT, rel), (err, data) => {
       if (err) { res.writeHead(404).end("ไม่พบไฟล์"); return; }
       res.writeHead(200, { "content-type": MIME[".js"], "cache-control": "no-store" });
       res.end(data);
     });
     return;
   }
+  const target = path.join(PUBLIC, rel);
   // กันการขอไฟล์ออกนอกโฟลเดอร์ public
   if (!target.startsWith(PUBLIC + path.sep) && target !== PUBLIC) {
     res.writeHead(403).end("forbidden");
@@ -221,6 +277,11 @@ function main() {
       });
       return;
     }
+    if (req.url.startsWith("/api/backtest")) {
+      res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
+      res.end(JSON.stringify(watcher.backtestView(), null, 2));
+      return;
+    }
     if (req.url.startsWith("/api/snapshot")) {
       res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" });
       res.end(JSON.stringify(watcher.snapshot(), null, 2));
@@ -240,9 +301,11 @@ function main() {
   server.listen(opts.port, opts.host, () => {
     const url = `http://${opts.host}:${opts.port}`;
     const exists = fs.existsSync(path.join(opts.logs, "audit.jsonl"));
+    const hasBacktest = fs.existsSync(opts.backtest);
     console.log(`
 Dashboard พร้อมแล้ว   ${url}
 เฝ้าไฟล์ที่            ${opts.logs}
+แท็บ backtest         ${hasBacktest ? opts.backtest : "ยังไม่มีไฟล์ — ลองรัน  tradebot --backtest --days 90"}
 ${exists ? "" : "ยังไม่มี audit.jsonl — ลองรัน  tradebot --dry-run --iterations 30\n"}กด Ctrl+C เพื่อหยุด (ไม่กระทบบอทที่กำลังรันอยู่)
 `);
     if (opts.open) {

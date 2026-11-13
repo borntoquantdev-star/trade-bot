@@ -1,24 +1,51 @@
-/* แคนวาสแบบ Trade Bot Designer — ถอดแบบจากโครง Fleetroom/symvibe canvas
- * แถบบน + แถบเครื่องมือซ้าย + พื้นที่แคนวาสที่ลาก/ซูมได้ + การ์ด node ที่มีหัวการ์ด
- * + กรอบ group + เส้นต่อ SVG + มินิแมปกับแถบซูมมุมขวาล่าง + แถบสถานะล่างสุด */
+/* แคนวาสไร้ขอบเขต — ภาษาการออกแบบแบบบอร์ดของ Symvibe
+ *
+ * โครงเหมือนเดิมทุกอย่าง (แถบบน + รางเครื่องมือซ้าย + แคนวาสที่ลาก/ซูมได้ +
+ * การ์ด node ที่มีหัวการ์ด + กรอบ group + เส้นต่อ SVG + มินิแมป + แถบล่าง)
+ * ที่เปลี่ยนคือวิธีมอง:
+ *
+ *   1. พื้นดำอุ่น ไม่ใช่ดำอมน้ำเงิน · ตัวอักษรเป็นครีม ไม่ใช่ขาวฟ้า
+ *   2. ส้มเป็นสีของ "ระบบ" เท่านั้น — แท็บที่เลือก เครื่องมือที่ถือ เส้นที่วิ่ง
+ *      ห้ามใช้บอกสถานะของเงิน สถานะใช้เขียว/เหลือง/แดงแยกต่างหาก
+ *      ไม่งั้นส้มที่แปลว่า "กำลังเลือกอยู่" จะปนกับแดงที่แปลว่า "ขาดทุน"
+ *   3. แถบต่างๆ ลอยเป็นเกาะบนแคนวาส ไม่ใช่แถบทึบเต็มขอบจอ
+ *      แคนวาสจึงดูไม่มีขอบเขต ซึ่งเป็นทั้งหมดของคำว่า infinite board
+ *   4. ตัวเลข เวลา รหัส และคำสั่ง เป็น monospace เสมอ
+ *      ส่วนข้อความไทยอยู่ในฟอนต์ sans เพราะไทยใน mono อ่านยาก
+ *
+ * ไม่โหลดฟอนต์จากข้างนอก หน้านี้ผูกกับ 127.0.0.1 และต้องเปิดได้ตอนเน็ตหลุด
+ */
 
 :root {
-  --canvas: #0a111e;
-  --grid: #10192b;
-  --surface: #0f1a2b;
-  --raised: #142339;
-  --border: #1e3350;
-  --head: #132135;
-  --text: #e8eef6;
-  --muted: #8ba0bb;
-  --dim: #5f738d;
-  --accent: #4ea3f5;
-  --accent-soft: #4ea3f51f;
-  --ok: #5fd39a;
-  --warn: #ffd166;
-  --bad: #ff7b7b;
-  --wire: #3f8fd6;
+  /* พื้นและผิว */
+  --canvas: #14110e;
+  --grid: #221b15;
+  --surface: #1a1612;
+  --raised: #1f1a16;
+  --head: #211b16;
+  --border: rgba(241, 233, 221, 0.1);
+  --rule: rgba(241, 233, 221, 0.07);
+
+  /* ตัวอักษร */
+  --text: #f1e9dd;
+  --muted: #cdc2b3;
+  --dim: #8b7e72;
+  --faint: #6b6056;
+
+  /* ส้ม = ระบบ ไม่ใช่สถานะ */
+  --accent: #ff6b3d;
+  --accent-bright: #ff8038;
+  --accent-soft: #ff6b3d1f;
+
+  /* สถานะ */
+  --ok: #5fbe86;
+  --warn: #e8a33d;
+  --bad: #f0564d;
+  --info: #6aa7ff;
+
+  --wire: #6b5444;
   --shell: 52px;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -35,100 +62,141 @@ body {
 
 .spacer { flex: 1; }
 
-/* ---------- แถบบน ---------- */
+/* เกาะลอย: พื้นหลังโปร่งเบลอ ขอบเส้นผม เงานุ่ม */
+.brand,
+.tabs,
+.pill,
+.rail,
+.minimap,
+.zoombar,
+.status > span {
+  background: #1a1612cc;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px #00000055;
+}
+
+/* ---------- แถบบน: ลอย ไม่ใช่แถบทึบ ---------- */
 
 .top {
   position: fixed;
-  inset: 0 0 auto 0;
-  height: var(--shell);
+  inset: 10px 14px auto 14px;
+  height: 38px;
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 14px;
-  background: linear-gradient(#0d1627f2, #0d1627cc);
-  border-bottom: 1px solid #16263d;
-  backdrop-filter: blur(6px);
+  gap: 10px;
+  padding: 0;
+  background: none;
+  border: 0;
+  /* ช่องว่างระหว่างเกาะต้องลากแคนวาสทะลุได้ ไม่งั้นแถบบนกินพื้นที่ลากไปทั้งแถบ */
+  pointer-events: none;
 }
-.brand { display: flex; align-items: center; gap: 9px; }
-.brand .mark {
-  width: 24px; height: 24px;
-  display: grid; place-items: center;
-  border-radius: 7px;
-  background: linear-gradient(140deg, #2f7fd0, #1b4f87);
-  color: #eaf4ff;
-  font-size: 11px; font-weight: 800; letter-spacing: -0.4px;
-}
-.brand b { font-size: 14px; font-weight: 650; }
+.top > * { pointer-events: auto; }
+.top .spacer { pointer-events: none; }
 
-.tabs { display: flex; gap: 3px; padding: 2px; background: #101c2e; border: 1px solid #1b2d47; border-radius: 9px; }
-.tab {
-  min-height: 26px; padding: 3px 13px;
-  border: 0; border-radius: 7px;
-  background: transparent; color: var(--muted);
-  font: inherit; font-size: 12px; cursor: pointer;
+.brand {
+  display: flex; align-items: center; gap: 8px;
+  height: 34px; padding: 0 13px 0 7px;
 }
-.tab.on { background: #1b3a5e; color: #d7e9ff; }
+.brand .mark {
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #ffb27a, var(--accent) 60%, #d2451c);
+  color: #2a1208;
+  font-size: 10px; font-weight: 800; letter-spacing: -0.4px;
+}
+.brand b { font-size: 13.5px; font-weight: 650; letter-spacing: -0.1px; }
+
+.tabs {
+  display: flex; gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+}
+.tab {
+  min-height: 28px; padding: 3px 15px;
+  border: 0; border-radius: 999px;
+  background: transparent; color: var(--dim);
+  font: inherit; font-size: 12px; cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.tab:hover { color: var(--muted); }
+.tab.on {
+  background: var(--accent);
+  color: #2a1208;
+  font-weight: 650;
+}
 
 .pill {
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 4px 11px;
+  height: 34px; padding: 0 13px;
   font-size: 12px; color: var(--muted);
-  background: #101c2e; border: 1px solid #1b2d47; border-radius: 999px;
   white-space: nowrap;
 }
-.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
-.pill.on .dot { background: var(--ok); box-shadow: 0 0 0 3px #5fd39a26; }
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.pill.on .dot { background: var(--ok); box-shadow: 0 0 0 3px #5fbe8626; }
 .pill.off .dot { background: var(--bad); }
-.pill.live-real { color: #ffd9d9; border-color: #6d2b2b; }
-.pill.live-real .dot { background: var(--bad); }
-#pillSymbol { color: #cfe6ff; border-color: #24496f; font-weight: 650; }
+.pill.live-real { color: #ffd9d2; border-color: #7a3328; }
+.pill.live-real .dot { background: var(--bad); box-shadow: 0 0 0 3px #f0564d33; }
+#pillSymbol { color: var(--text); font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.2px; }
 
-/* ---------- แถบเครื่องมือซ้าย ---------- */
+/* ---------- รางเครื่องมือซ้าย ---------- */
 
 .rail {
   position: fixed;
-  left: 12px; top: calc(var(--shell) + 56px);
+  left: 14px; top: calc(var(--shell) + 40px);
   z-index: 15;
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 6px;
-  background: #0e1a2bdd; border: 1px solid #1b2d47; border-radius: 12px;
-  backdrop-filter: blur(6px);
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 5px;
+  border-radius: 16px;
 }
 .tool {
-  width: 34px; height: 34px;
+  width: 32px; height: 32px;
   display: grid; place-items: center;
-  border: 1px solid transparent; border-radius: 9px;
-  background: transparent; color: var(--muted);
-  font-size: 15px; cursor: pointer;
+  border: 0; border-radius: 50%;
+  background: transparent; color: var(--dim);
+  font-size: 14px; cursor: pointer;
+  transition: color 0.12s, background 0.12s;
 }
-.tool:hover { background: #16263d; color: var(--text); }
-.tool.on { background: #1b4472; border-color: #2f7fd0; color: #d7e9ff; }
+.tool:hover { background: #ffffff0f; color: var(--text); }
+.tool.on {
+  background: var(--accent);
+  color: #2a1208;
+  box-shadow: 0 2px 10px #ff6b3d55;
+}
 
 /* ---------- แบนเนอร์หยุด ---------- */
 
 .halt {
   position: fixed;
-  left: 50%; top: calc(var(--shell) + 10px);
+  left: 50%; top: calc(var(--shell) + 8px);
   transform: translateX(-50%);
   z-index: 18;
   max-width: min(680px, calc(100vw - 40px));
-  padding: 10px 16px;
-  background: #2a1414ee; border: 1px solid #a8413f; border-radius: 10px;
-  color: #ffd9d9;
+  padding: 10px 18px;
+  background: #2b140fee;
+  border: 1px solid #8a3326;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px #00000066;
+  color: #ffd9d2;
 }
-.halt b { color: #ff8a8a; }
-.halt-sub { font-size: 11.5px; color: #e2b6b6; margin-top: 3px; }
-.halt code { background: #3a1d1d; padding: 1px 5px; border-radius: 4px; }
+.halt b { color: #ff8a7a; }
+.halt-sub { font-size: 11.5px; color: #d9afa5; margin-top: 3px; }
+.halt code {
+  background: #3d1c14; padding: 1px 6px; border-radius: 5px;
+  font-family: var(--mono); font-size: 11px;
+}
 .halt[hidden] { display: none; }
 
 .canvas-hint {
   position: fixed;
-  left: 50%; top: calc(var(--shell) + 12px);
+  left: 50%; top: calc(var(--shell) + 10px);
   transform: translateX(-50%);
   z-index: 4;
   margin: 0;
-  color: #3f5674;
+  color: #4a4038;
   font-size: 11.5px;
   pointer-events: none;
 }
@@ -137,40 +205,43 @@ body {
 
 .canvas {
   position: fixed;
-  inset: var(--shell) 0 26px 0;
+  inset: 0;
   overflow: hidden;
   cursor: grab;
   background-color: var(--canvas);
   background-image: radial-gradient(var(--grid) 1px, transparent 1px);
-  background-size: 26px 26px;
+  background-size: 24px 24px;
 }
 .canvas.panning { cursor: grabbing; }
 .layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 
 .wires { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
-.wires path { fill: none; stroke: var(--wire); stroke-width: 2; stroke-dasharray: 6 4; opacity: 0.55; }
-.wires path.flow { opacity: 0.95; animation: dash 0.9s linear infinite; }
-.wires path.head { stroke-dasharray: none; opacity: 0.8; }
+.wires path {
+  fill: none; stroke: var(--wire); stroke-width: 1.5;
+  stroke-dasharray: 5 5; opacity: 0.6;
+}
+.wires path.flow { stroke: var(--accent); opacity: 0.9; animation: dash 0.9s linear infinite; }
+.wires path.head { stroke-dasharray: none; opacity: 0.75; }
 @keyframes dash { to { stroke-dashoffset: -20; } }
 .wires.hidden { display: none; }
 
 /* กรอบ group */
 .group {
   position: absolute;
-  background: #2f7fd008;
-  border: 1px solid #2a5c8f66;
-  border-radius: 16px;
+  background: #ff6b3d06;
+  border: 1px solid #ff6b3d2e;
+  border-radius: 18px;
   pointer-events: none;
 }
 .group-label {
-  position: absolute; left: 14px; top: 0;
+  position: absolute; left: 16px; top: 0;
   transform: translateY(-50%);
-  padding: 4px 11px;
-  color: #9dcbf5;
-  background: #0f1d30;
-  border: 1px solid #2a5c8f;
-  border-radius: 7px;
-  font-size: 11px; letter-spacing: 0.4px;
+  padding: 4px 12px;
+  color: #ffb79a;
+  background: #221812;
+  border: 1px solid #ff6b3d3d;
+  border-radius: 999px;
+  font-size: 10.5px; letter-spacing: 0.5px;
   white-space: nowrap;
 }
 
@@ -180,146 +251,275 @@ body {
   position: absolute;
   display: flex; flex-direction: column;
   background: var(--surface);
-  border: 1px solid #22395a;
-  border-radius: 11px;
-  box-shadow: 0 10px 26px #00000055;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px #00000066;
   overflow: hidden;
 }
 .node-head {
   display: flex; align-items: center; gap: 8px;
-  height: 32px; min-height: 32px;
-  padding: 0 10px;
+  height: 30px; min-height: 30px;
+  padding: 0 8px 0 11px;
   background: var(--head);
-  border-bottom: 1px solid #1d3452;
+  border-bottom: 1px solid var(--rule);
   cursor: grab;
 }
 .node-head:active { cursor: grabbing; }
-.node-head .tag { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
-.node-head .title { font-size: 12px; font-weight: 600; color: #dce9f7; }
-.node-head .state { margin-left: auto; font-size: 10.5px; font-weight: 700; color: var(--dim); }
-.node-body { flex: 1; min-height: 0; padding: 11px 12px; overflow: auto; }
+.node-head .tag { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.node-head .title { font-size: 12px; font-weight: 600; color: var(--text); }
 
-.node.ready { border-color: #2f7a57; }
-.node.ready .node-head { background: #10281e; border-bottom-color: #2f7a57; }
-.node.ready .node-head .tag, .node.ready .node-head .state { background: var(--ok); color: var(--ok); }
-.node.ready .node-head .state { background: none; }
+/* ป้ายสถานะมุมขวาของหัวการ์ด — ตัวบอกสถานะหลักของทั้งหน้า */
+.node-head .state {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ffffff0a;
+  color: var(--dim);
+  font-size: 10px; font-weight: 650; letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.node-body { flex: 1; min-height: 0; padding: 12px; overflow: auto; }
 
-.node.wip { border-color: #7a6124; }
-.node.wip .node-head { background: #241f10; border-bottom-color: #7a6124; }
+.node.ready { border-color: #2f6b4d; }
+.node.ready .node-head { background: #15241c; border-bottom-color: #2f6b4d; }
+.node.ready .node-head .tag { background: var(--ok); }
+.node.ready .node-head .state { background: #5fbe861f; color: var(--ok); }
+
+.node.wip { border-color: #6f5323; }
+.node.wip .node-head { background: #251c10; border-bottom-color: #6f5323; }
 .node.wip .node-head .tag { background: var(--warn); }
-.node.wip .node-head .state { color: var(--warn); }
+.node.wip .node-head .state { background: #e8a33d1f; color: var(--warn); }
 
-.node.blocked, .node.error { border-color: #7a2f2f; }
-.node.blocked .node-head, .node.error .node-head { background: #251212; border-bottom-color: #7a2f2f; }
+.node.blocked, .node.error { border-color: #7c3328; }
+.node.blocked .node-head, .node.error .node-head { background: #271310; border-bottom-color: #7c3328; }
 .node.blocked .node-head .tag, .node.error .node-head .tag { background: var(--bad); }
-.node.blocked .node-head .state, .node.error .node-head .state { color: var(--bad); }
+.node.blocked .node-head .state, .node.error .node-head .state { background: #f0564d1f; color: var(--bad); }
 .node.error { border-style: dashed; }
 
-.node.locked { border-color: #2d5a8f; border-style: dashed; }
-.node.locked .node-head { background: #101f33; }
-.node.locked .node-head .tag { background: #6aa7ff; }
-.node.locked .node-head .state { color: #9fd0ff; }
+.node.locked { border-color: #35506f; border-style: dashed; }
+.node.locked .node-head { background: #141c27; }
+.node.locked .node-head .tag { background: var(--info); }
+.node.locked .node-head .state { background: #6aa7ff1f; color: var(--info); }
 
 /* เนื้อในการ์ดขั้นตอน */
 .stage-metric {
-  font-size: 21px; font-weight: 650;
-  font-variant-numeric: tabular-nums;
-  color: #f2f7ff;
-  min-height: 27px;
-  letter-spacing: -0.3px;
+  font-family: var(--mono);
+  font-size: 20px; font-weight: 600;
+  color: var(--text);
+  min-height: 26px;
+  letter-spacing: -0.4px;
+  overflow-wrap: anywhere;
 }
-.stage-detail { color: var(--muted); font-size: 11.5px; line-height: 1.5; margin-top: 3px; }
-.stage-sub { color: #44607f; font-size: 10.5px; margin-top: 6px; }
+.stage-detail { color: var(--muted); font-size: 11.5px; line-height: 1.55; margin-top: 4px; }
+.stage-sub { color: var(--faint); font-size: 10.5px; margin-top: 7px; font-family: var(--mono); }
 
 /* การ์ดตัวเลข */
-.kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
-.kpi { background: #0c1627; border: 1px solid #1b2d47; border-radius: 9px; padding: 8px 10px; }
+.kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kpi {
+  background: #ffffff05;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
 .kpi .k { font-size: 10.5px; color: var(--dim); }
-.kpi .v { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.kpi .v {
+  font-family: var(--mono);
+  font-size: 15px; font-weight: 650; margin-top: 3px;
+  letter-spacing: -0.3px;
+}
 .kpi .v.pos { color: var(--ok); }
 .kpi .v.neg { color: var(--bad); }
-.kpi .n { font-size: 10px; color: var(--dim); margin-top: 1px; }
+.kpi .n { font-size: 10px; color: var(--faint); margin-top: 2px; }
 
 /* กราฟ */
-.chart-top { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
-.chart-top .last { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.chart-top .range { font-size: 11px; color: var(--muted); }
-.spark { width: 100%; height: calc(100% - 34px); display: block; color: var(--accent); }
-.spark .area { fill: var(--accent-soft); stroke: none; }
+.chart-top { display: flex; align-items: baseline; gap: 10px; margin-bottom: 7px; }
+.chart-top .last {
+  font-family: var(--mono);
+  font-size: 19px; font-weight: 650; letter-spacing: -0.4px;
+}
+.chart-top .last.pos { color: var(--ok); }
+.chart-top .last.neg { color: var(--bad); }
+.chart-top .range { font-size: 11px; color: var(--dim); }
+.spark { width: 100%; height: calc(100% - 36px); display: block; color: var(--muted); }
+.spark .area { fill: rgba(241, 233, 221, 0.05); stroke: none; }
 .spark .line { fill: none; stroke: currentColor; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.spark .mark { fill: var(--accent); }
+.spark .mark { fill: currentColor; }
 
 /* log */
 .feed { display: flex; flex-direction: column; gap: 5px; }
 .entry {
   display: grid; grid-template-columns: 62px 1fr; gap: 9px;
-  padding: 7px 9px;
-  background: #0c1627;
-  border: 1px solid #18283f;
-  border-left: 3px solid #2a3d58;
-  border-radius: 8px;
+  padding: 8px 10px;
+  background: #ffffff05;
+  border: 1px solid var(--rule);
+  border-left: 2px solid #4a3a2e;
+  border-radius: 9px;
 }
-.entry .t { font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.entry .t { font-size: 10.5px; color: var(--faint); font-family: var(--mono); }
 .entry .ti { font-size: 12px; font-weight: 600; }
 .entry .tx { font-size: 11px; color: var(--muted); }
-.entry .cd { font-size: 10px; color: #41536c; font-family: ui-monospace, Consolas, monospace; }
+.entry .cd { font-size: 10px; color: var(--faint); font-family: var(--mono); }
 .entry.order { border-left-color: var(--ok); }
 .entry.order .ti { color: var(--ok); }
 .entry.reject { border-left-color: var(--bad); }
 .entry.reject .ti { color: var(--bad); }
 .entry.signal { border-left-color: var(--accent); }
+.entry.exit { border-left-color: var(--accent); }
+.entry.exit .ti { color: var(--accent); }
 .entry.error { border-left-color: var(--warn); }
 .entry.error .ti { color: var(--warn); }
 
 .hint-empty { color: var(--muted); font-size: 12px; line-height: 1.7; }
+/* block เพื่อให้คำสั่งตัวอย่างหลายบรรทัดเรียงลงมาทีละบรรทัด (ของเดิมเป็น
+ * inline-block จึงต่อกันเป็นแถวเดียว) · ปล่อยให้กว้างเต็มการ์ดแทนการใช้
+ * ความกว้างแบบ intrinsic เพราะกล่องแม่เป็น overflow:auto */
 .hint-empty code {
-  display: inline-block; margin-top: 6px;
-  padding: 4px 8px;
-  background: #0c1627; border: 1px solid #1b2d47; border-radius: 6px;
-  color: var(--accent); font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+  display: block; margin-top: 6px; overflow-wrap: anywhere;
+  padding: 6px 9px;
+  background: #0f0c09; border: 1px solid var(--rule); border-radius: 7px;
+  color: #ffb79a; font-family: var(--mono); font-size: 11px;
 }
 
 /* ---------- มินิแมป + ซูม ---------- */
 
 .minimap {
-  position: fixed; right: 14px; bottom: 60px; z-index: 15;
+  position: fixed; right: 16px; bottom: 66px; z-index: 15;
   width: 168px; height: 104px;
-  background: #0c1627cc; border: 1px solid #1b2d47; border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
 }
 .minimap svg { width: 100%; height: 100%; display: block; }
-.minimap .mm-node { fill: #27456b; }
-.minimap .mm-node.ready { fill: #2f7a57; }
-.minimap .mm-node.wip { fill: #7a6124; }
-.minimap .mm-node.blocked, .minimap .mm-node.error { fill: #7a2f2f; }
+.minimap .mm-node { fill: #3a2e25; }
+.minimap .mm-node.ready { fill: #2f6b4d; }
+.minimap .mm-node.wip { fill: #6f5323; }
+.minimap .mm-node.blocked, .minimap .mm-node.error { fill: #7c3328; }
 .minimap .mm-view { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 
 .zoombar {
-  position: fixed; right: 14px; bottom: 32px; z-index: 16;
+  position: fixed; right: 16px; bottom: 16px; z-index: 16;
   display: flex; align-items: center; gap: 2px;
   padding: 3px;
-  background: #0c1627dd; border: 1px solid #1b2d47; border-radius: 9px;
+  border-radius: 999px;
 }
 .zoombar button {
-  min-width: 28px; height: 26px;
-  border: 0; border-radius: 6px;
-  background: transparent; color: var(--muted);
+  min-width: 26px; height: 26px;
+  border: 0; border-radius: 50%;
+  background: transparent; color: var(--dim);
   font: inherit; font-size: 13px; cursor: pointer;
 }
-.zoombar button:hover { background: #16263d; color: var(--text); }
-.zoombar span { min-width: 44px; text-align: center; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.zoombar button:hover { background: #ffffff0f; color: var(--text); }
+.zoombar #zoomFit { min-width: 38px; border-radius: 999px; font-size: 11.5px; }
+.zoombar span {
+  min-width: 42px; text-align: center;
+  font-size: 11px; color: var(--muted); font-family: var(--mono);
+}
 
-/* ---------- แถบสถานะล่าง ---------- */
+/* ---------- แถบล่าง: ลอยสองเกาะชิดซ้าย ---------- */
+/* ชิดซ้ายทั้งคู่เพราะมุมขวาล่างเป็นที่ของมินิแมปกับแถบซูมอยู่แล้ว */
 
 .status {
-  position: fixed; inset: auto 0 0 0; z-index: 14;
-  height: 26px;
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 14px;
-  background: #0b1626; border-top: 1px solid #16263d;
-  color: #44607f; font-size: 11px;
+  position: fixed; inset: auto auto 16px 14px; z-index: 14;
+  height: 28px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0;
+  background: none; border: 0;
+  color: var(--dim); font-size: 11px;
+  pointer-events: none;
 }
-.status .warn-note { color: #3f5674; }
+.status > span {
+  height: 28px;
+  display: inline-flex; align-items: center;
+  padding: 0 13px;
+  pointer-events: auto;
+}
+.status .spacer {
+  flex: 0; background: none; border: 0; box-shadow: none;
+  backdrop-filter: none; padding: 0; pointer-events: none;
+}
+.status .warn-note { color: var(--faint); }
+
+/* ---------- หน้า backtest ---------- */
+
+/* หัวบล็อกบอกว่าเป็นผลของกลยุทธ์ไหน บนอะไร ช่วงไหน */
+.bt-head {
+  display: flex; flex-direction: column; gap: 3px;
+  padding-bottom: 10px; margin-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.bt-head .who { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.bt-head .when { font-size: 10.5px; color: var(--dim); font-family: var(--mono); }
+
+/* บอท vs ซื้อแล้วถือเฉยๆ */
+.versus { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.vs-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 10px 12px;
+  background: #ffffff05; border: 1px solid var(--rule); border-radius: 10px;
+}
+.vs-row.win { border-color: #3a7d5c; background: #15241c; }
+.vs-k { font-size: 11.5px; color: var(--muted); }
+.vs-v { font-family: var(--mono); font-size: 18px; font-weight: 650; letter-spacing: -0.4px; }
+.vs-v.pos { color: var(--ok); }
+.vs-v.neg { color: var(--bad); }
+
+/* กราฟเส้นทุน: เส้นประคือทุนเริ่มต้น แรเงาคือช่วงที่อยู่ใต้พีคเดิม */
+.spark.equity { color: var(--ok); height: calc(100% - 64px); }
+.spark.equity.down { color: var(--bad); }
+.spark .under { fill: #f0564d1c; stroke: none; }
+.spark .base {
+  stroke: var(--faint); stroke-width: 1; stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* รายการไม้ */
+.trade {
+  display: grid; grid-template-columns: 74px 1fr 92px 58px; gap: 9px;
+  align-items: center;
+  padding: 8px 10px;
+  background: #ffffff05;
+  border: 1px solid var(--rule);
+  border-left: 2px solid #4a3a2e;
+  border-radius: 9px;
+}
+.trade .t { font-size: 10.5px; color: var(--dim); font-family: var(--mono); }
+.trade .ti { font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.4px; }
+.trade .tx { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.trade .cd { font-size: 10px; color: var(--faint); font-family: var(--mono); }
+.trade .money, .trade .r {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 12.5px; font-weight: 650;
+}
+.trade .r { font-size: 11.5px; color: var(--dim); }
+.trade .money.pos, .trade .r.pos { color: var(--ok); }
+.trade .money.neg, .trade .r.neg { color: var(--bad); }
+.trade.win { border-left-color: var(--ok); }
+.trade.loss { border-left-color: var(--bad); }
+
+/* แท่งนับเหตุผลที่ด่านปฏิเสธ */
+.bars { display: flex; flex-direction: column; gap: 6px; margin: 11px 0; }
+.bar-row { display: grid; grid-template-columns: 1fr 72px 32px; gap: 8px; align-items: center; }
+.bar-k { font-size: 11.5px; color: var(--text); }
+.bar-track {
+  height: 6px; background: #ffffff08;
+  border: 1px solid var(--rule); border-radius: 999px; overflow: hidden;
+}
+.bar-fill { display: block; height: 100%; background: var(--bad); opacity: 0.8; }
+.bar-v { text-align: right; font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+
+.halt-inline {
+  margin-top: 11px; padding: 9px 11px;
+  background: #271310; border: 1px solid #7c3328; border-radius: 10px;
+}
+.halt-inline .ti { font-size: 12px; font-weight: 650; color: #ff8a7a; }
+.halt-inline .tx { font-size: 11px; color: #d9afa5; margin-top: 3px; }
+
+/* ข้อจำกัดที่ต้องขึ้นจอทุกครั้ง */
+.notes { margin: 0; padding-left: 17px; display: flex; flex-direction: column; gap: 7px; }
+.notes li { font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+.notes li::marker { color: var(--faint); }
+.notes li.warn { color: var(--warn); }
+.notes li.warn::marker { color: var(--warn); }
 
 @media (max-width: 720px) {
   .rail, .minimap { display: none; }

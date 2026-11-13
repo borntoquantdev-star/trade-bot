@@ -1,0 +1,5 @@
+target/
+app/dist/
+app/target/
+**/*.log
+.git/

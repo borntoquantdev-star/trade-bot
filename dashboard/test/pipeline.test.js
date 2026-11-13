@@ -202,3 +202,37 @@ test("derive ไม่แก้ข้อมูลที่รับเข้า�
   P.derive({ rows, state });
   assert.deepEqual(rows, copy);
 });
+
+test("ปิดไม้ขึ้น log เป็นเรื่องของตัวเอง ไม่ใช่ออเดอร์ใหม่", () => {
+  const rows = [
+    {
+      at: "2026-11-13T12:00:00+00:00",
+      symbol: "BTC_USDT_Perp",
+      price: "68500",
+      equity: "10000",
+      position: { side: "buy", qty: "0.1", entry_price: "68400" },
+      exit: { reason: "price came back to the average", simulated: true },
+    },
+  ];
+  const view = P.derive({ rows });
+  assert.equal(view.counts.exits, 1);
+  assert.equal(view.log[0].kind, "exit");
+  assert.match(view.log[0].text, /came back/);
+  assert.match(view.log[0].text, /paper/);
+});
+
+test("บรรทัดที่ปิดไม้ ขั้นที่ห้าต้องไม่บอกว่ายังถืออยู่", () => {
+  const rows = [
+    {
+      at: "t",
+      price: "68500",
+      equity: "10000",
+      position: { side: "buy", qty: "0.1", entry_price: "68400" },
+      exit: { reason: "stop hit at 68000", simulated: true },
+    },
+  ];
+  const nodes = P.nodesOf(rows, null);
+  const position = nodes.find((n) => n.id === "position");
+  assert.equal(position.metric, "ปิดแล้ว");
+  assert.match(position.detail, /stop hit/);
+});

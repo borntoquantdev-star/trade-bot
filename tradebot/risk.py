@@ -34,6 +34,29 @@ from .types import (
 
 Decision = SizedOrder | Reject
 
+#: How many decimal places a money figure keeps when it appears in a message.
+#: Display only: nothing computed here is ever rounded.
+_SHOWN_PLACES = Decimal("0.0001")
+
+
+def show(value: Decimal) -> str:
+    """Format a money figure for a human, without the division tail.
+
+    ``equity * max_daily_loss`` is an exact Decimal with as many digits as the
+    two operands imply, which for a 3% limit on a 9,800 balance is twenty-odd
+    of them. The reader needs four.
+    """
+    if not value.is_finite():
+        return str(value)
+    if value == value.to_integral_value():
+        return str(value.quantize(Decimal("1")))
+    rounded = value.quantize(_SHOWN_PLACES)
+    if rounded == 0:
+        # Never print a non-zero amount as 0: "would risk 0" reads as a bug
+        # report about the bot rather than a fact about the number.
+        return format(value.normalize(), "f")
+    return str(rounded.normalize())
+
 
 def client_order_id(signal: Signal) -> str:
     """A deterministic idempotency key for *signal*.
@@ -113,8 +136,9 @@ def risk_gate(
     if state.equity <= floor_equity:
         return Reject(
             RejectCode.MAX_DRAWDOWN,
-            f"equity {state.equity} is at or below the drawdown floor {floor_equity} "
-            f"(peak {state.peak_equity}, limit {limits.max_drawdown * 100}%)",
+            f"equity {show(state.equity)} is at or below the drawdown floor "
+            f"{show(floor_equity)} (peak {show(state.peak_equity)}, "
+            f"limit {show(limits.max_drawdown * 100)}%)",
         )
 
     # 3. Daily loss limit - realised losses booked today.
@@ -122,8 +146,8 @@ def risk_gate(
     if state.realized_pnl_today <= -daily_budget:
         return Reject(
             RejectCode.DAILY_LOSS_LIMIT,
-            f"today's realised loss {state.realized_pnl_today} has reached the "
-            f"daily budget of -{daily_budget}",
+            f"today's realised loss {show(state.realized_pnl_today)} has reached "
+            f"the daily budget of -{show(daily_budget)}",
         )
 
     # 4. Expired - never open a position on a stale signal.
@@ -215,8 +239,8 @@ def risk_gate(
         smallest = spec.lot_step * cost_per_unit
         return Reject(
             RejectCode.QTY_ROUNDS_TO_ZERO,
-            f"risk budget {risk_budget} buys less than one lot step "
-            f"({spec.lot_step}); the smallest possible order would risk {smallest}",
+            f"risk budget {show(risk_budget)} buys less than one lot step "
+            f"({spec.lot_step}); the smallest possible order would risk {show(smallest)}",
         )
 
     # The limit price caps slippage inside the order itself: the exchange is
@@ -249,8 +273,8 @@ def risk_gate(
     if notional < spec.min_notional:
         return Reject(
             RejectCode.BELOW_MIN_NOTIONAL,
-            f"order value {notional} is below the exchange minimum "
-            f"{spec.min_notional} for {spec.symbol}",
+            f"order value {show(notional)} is below the exchange minimum "
+            f"{show(spec.min_notional)} for {spec.symbol}",
         )
 
     # 13. Total exposure ceiling (the only place leverage is enforced).
@@ -260,8 +284,8 @@ def risk_gate(
     if new_exposure > exposure_cap:
         return Reject(
             RejectCode.EXCEEDS_EXPOSURE,
-            f"total exposure would be {new_exposure}, over the cap {exposure_cap} "
-            f"(equity {state.equity} x {leverage_cap})",
+            f"total exposure would be {show(new_exposure)}, over the cap "
+            f"{show(exposure_cap)} (equity {show(state.equity)} x {leverage_cap})",
         )
 
     return SizedOrder(
@@ -284,7 +308,7 @@ def explain(decision: Decision) -> str:
     return (
         f"APPROVED {decision.side.value} {decision.qty} {decision.symbol} "
         f"@ limit {decision.limit_price} (stop {decision.stop_price}, "
-        f"risking {decision.risk_amount}, id {decision.client_order_id})"
+        f"risking {show(decision.risk_amount)}, id {decision.client_order_id})"
     )
 
 
@@ -293,4 +317,5 @@ __all__ = [
     "client_order_id",
     "explain",
     "risk_gate",
+    "show",
 ]

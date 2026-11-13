@@ -19,6 +19,33 @@ core/config.py     YAML + environment, validated once, then immutable
 Imports only ever point inwards. `risk.py` knows nothing about brokers,
 strategies, configuration files or the exchange.
 
+## Getting out
+
+The loop can close a position, and only the strategy decides when:
+
+```
+strategy.get_exit(market) -> "why", or None to hold
+        |
+        v
+engine closes through the broker, writes `exit` into the audit trail
+```
+
+Two rules hold this up:
+
+* **Closing is not gated.** `risk_gate` approves *taking* risk; getting out
+  reduces it. A halted bot can still flatten - a halt that trapped the
+  position it was meant to protect would be the danger it was guarding
+  against.
+* **One action per iteration.** A tick either closes or opens, never both,
+  so every line of the audit trail belongs to exactly one price.
+
+The replay honours `get_exit` too, after the stop and the target have had
+their say: a backtest that ignored it would be testing a different bot from
+the one that trades.
+
+A stop is still not a resting order at the exchange. See the list at the end
+of `AGENTS.md`.
+
 ## The risk gate contract
 
 `risk_gate()` is the only function that may decide an order exists. It is:
@@ -30,7 +57,7 @@ strategies, configuration files or the exchange.
   distance only. A strategy cannot argue for a bigger position.
 
 That is not purism. It is what lets one implementation serve paper trading,
-live trading and a future backtest. The moment the gate can read a file or
+live trading and the backtester. The moment the gate can read a file or
 await something, the backtest needs its own copy, the two copies drift, and
 the number you trusted in the backtest is not the number that trades.
 
@@ -154,9 +181,13 @@ prices: no highs, no lows, no volume. A strategy that needs true OHLCV (ATR,
 volume profile) needs `MarketView` widened to carry the `Candle` objects the
 broker already returns.
 
-**No backtester.** The gate is pure so that one can be written: feed historical
-candles to a strategy, call the same `risk_gate`, simulate fills. Nothing in
-this repository currently tells you whether a strategy makes money.
+**The backtester models fills, not the order book.** `tradebot/backtest/`
+replays stored candles through the same `risk_gate`, and the purity of the
+gate is what made that twenty lines of wiring rather than a second trading
+system. What it adds is a fill model, and that model is deliberately
+pessimistic: a signal acts one bar late, a limit the bar never traded through
+does not fill, and a bar containing both the stop and the target takes the
+stop. Funding is not charged at all. See [backtest.md](backtest.md).
 
 **Optimistic paper fills.** `PaperBroker` fills at the limit price,
 immediately, with no partial fills, no queue position and no funding. It
@@ -176,6 +207,7 @@ different thing and the one it can guarantee by itself.
 | A new refusal reason | `RejectCode` (in severity order) + `risk_gate` + a test |
 | Another exchange | `tradebot/brokers/`, implement the `Broker` protocol, register it in `build_live_broker` |
 | OHLCV in strategies | Widen `MarketView` to carry `Candle` objects |
-| A backtest | A new runner calling the existing `risk_gate` |
+| A different fill assumption | `fill_price` / `exit_on_bar` in `backtest/runner.py` |
+| A new backtest statistic | `backtest/result.py`, then show it in `report.py` |
 
 Nothing on that list requires changing `risk.py` except the second one.

@@ -1,0 +1,36 @@
+# ต่อบัญชี GRVT testnet ของจริง — ออเดอร์เข้าตลาดจริง แต่เงินเป็นเงินทดลอง
+#
+#   tradebot --doctor  --config config/testnet.yaml      ตรวจก่อน ไม่ส่งออเดอร์
+#   tradebot --live    --config config/testnet.yaml --iterations 24
+#
+# กุญแจไม่ได้อยู่ในไฟล์นี้ ไฟล์นี้อ้างถึงตัวแปรเท่านั้น
+# ค่าจริงอยู่ใน config/.env (อยู่ใน .gitignore แล้ว) หรือเป็นตัวแปรใน shell
+# ตัวแปรจริงใน shell ชนะไฟล์เสมอ
+
+exchange: "grvt"
+
+grvt:
+  env: "testnet"
+  api_key: "${GRVT_API_KEY}"
+  private_key: "${GRVT_PRIVATE_KEY}"
+  trading_account_id: "${GRVT_TRADING_ACCOUNT_ID}"
+  sub_account_id: "${GRVT_SUB_ACCOUNT_ID}"
+
+trading:
+  symbol: "BTC_USDT_Perp"
+  timeframe: "1m"
+  warmup_candles: 60
+  loop_interval: 5
+  strategy: "ping_pong"
+
+risk:
+  # เล็กที่สุดเท่าที่ยังผ่านขั้นต่ำของตลาด: BTC_USDT_Perp มี min_notional = 100 USDT
+  # ถ้าทุนทดลองน้อยกว่านี้มาก ให้เปลี่ยนไปเหรียญชั้น 5 ดอลลาร์ เช่น SOL_USDT_Perp
+  risk_per_trade_pct: 0.5
+  max_positions: 1
+  max_daily_loss_pct: 3.0
+  max_drawdown_pct: 10.0
+  max_leverage: 5
+  max_slippage_pct: 0.1
+  fee_rate_pct: 0.05
+  allow_short: true

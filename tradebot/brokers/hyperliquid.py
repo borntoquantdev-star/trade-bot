@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from ..intervals import INTERVAL_MS
+from ..intervals import INTERVALS as SHARED_INTERVALS
 from ..money import ZERO, D
 from ..types import Candle, InstrumentSpec, Position, Side, SizedOrder
 from .base import BrokerError, OrderReceipt, require_positive
@@ -47,39 +49,9 @@ PRICE_SIG_FIGS = 5
 DEFAULT_MIN_NOTIONAL = D(10)
 
 #: Intervals the candle endpoint accepts.
-INTERVALS = (
-    "1m",
-    "3m",
-    "5m",
-    "15m",
-    "30m",
-    "1h",
-    "2h",
-    "4h",
-    "8h",
-    "12h",
-    "1d",
-    "3d",
-    "1w",
-    "1M",
-)
+INTERVALS = (*SHARED_INTERVALS, "1M")
 
-_INTERVAL_MS = {
-    "1m": 60_000,
-    "3m": 180_000,
-    "5m": 300_000,
-    "15m": 900_000,
-    "30m": 1_800_000,
-    "1h": 3_600_000,
-    "2h": 7_200_000,
-    "4h": 14_400_000,
-    "8h": 28_800_000,
-    "12h": 43_200_000,
-    "1d": 86_400_000,
-    "3d": 259_200_000,
-    "1w": 604_800_000,
-    "1M": 2_592_000_000,
-}
+_INTERVAL_MS = INTERVAL_MS
 
 
 # --- pure readers (unit tested against payloads, no network) ----------------
@@ -299,6 +271,8 @@ class HyperliquidBroker:
     """
 
     name = "hyperliquid"
+    #: Hyperliquid caps a candle snapshot at 5000 bars per request.
+    max_candles_per_request = 5000
 
     def __init__(
         self,
@@ -452,6 +426,26 @@ class HyperliquidBroker:
         rows = self._require_info().candles_snapshot(symbol, interval, start, end)
         candles = read_candles(rows, symbol, interval)
         return candles[-limit:] if limit else candles
+
+    def fetch_candles_range(
+        self, symbol: str, interval: str, start: datetime, end: datetime
+    ) -> list[Candle]:
+        """One page of history starting at *start*, for the downloader.
+
+        Hyperliquid answers a time window rather than a bar count, so the
+        window is clipped to the page size before asking; walking the pages is
+        :func:`tradebot.data.fetch.download` job.
+        """
+        if interval not in _INTERVAL_MS:
+            raise BrokerError(f"interval must be one of {', '.join(INTERVALS)}, got {interval!r}")
+        if end <= start:
+            return []
+        span = _INTERVAL_MS[interval]
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = min(int(end.timestamp() * 1000), start_ms + span * self.max_candles_per_request)
+        rows = self._require_info().candles_snapshot(symbol, interval, start_ms, end_ms)
+        candles = read_candles(rows, symbol, interval)
+        return [c for c in candles if start <= c.open_time < end]
 
     # --- writes ----------------------------------------------------------
 

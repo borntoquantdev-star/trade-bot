@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>tradebot board</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #14110e;
+  }
+  canvas { width: 100% !important; height: 100% !important; display: block; }
+  #boot {
+    position: fixed; inset: 0;
+    display: grid; place-content: center; gap: 10px; justify-items: center;
+    color: #cdc2b3; background: #14110e;
+    font: 13px/1.5 "Segoe UI", system-ui, "Noto Sans Thai", sans-serif;
+  }
+  #boot .mark {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: radial-gradient(circle at 32% 28%, #ffb27a, #ff6b3d 60%, #d2451c);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  #boot b { color: #f1e9dd; font-weight: 650; }
+  #boot small { color: #6b6056; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+</style>
+</head>
+<body>
+<div id="boot">
+  <div class="mark"></div>
+  <b>tradebot board</b>
+  <small>กำลังโหลด WebAssembly…</small>
+</div>
+
+<canvas id="board_canvas"></canvas>
+
+<!-- wasm-opt is off on purpose. On a module this size `-Oz` runs for tens of
+     minutes and is the step that wedged the Docker build; thin LTO already
+     does most of the shrinking. Turn it back on with data-wasm-opt="z" when
+     building somewhere with memory to spare. -->
+<link data-trunk rel="rust" data-wasm-opt="0" data-target-name="board" />
+</body>
+</html>

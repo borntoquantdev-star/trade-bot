@@ -24,17 +24,28 @@ tradebot/
   core/
     config.py     YAML + environment variables, validated.
     engine.py     The loop. Owns no trading rules.
+  data/           Candle history: downloaded once, read offline forever.
+    store.py      CSV on disk. Idempotent, sorted, Decimal-safe.
+    fetch.py      Walks a venue's pages into the store.
+  backtest/       Replays stored candles through risk_gate(). No network.
+    runner.py     The replay loop and the fill model.
+    result.py     Trades, equity curve, statistics.
+    report.py     The text summary, and the JSON the dashboard reads.
+  intervals.py    The one table of bar intervals.
+  trace.py        Which lines one tick ran, for the board. Never required.
+  runs.py         One line when a run starts, one when it ends.
   cli/main.py     Argument parsing and one-shot actions.
 ```
 
-The dependency direction is one-way: `cli → core → {strategies, brokers} →
-{risk, types, money}`. Nothing in the inner layers may import an outer one.
+The dependency direction is one-way: `cli → {core, backtest} → {strategies,
+brokers, data} → {risk, types, money, intervals, trace, runs}`. Nothing in the inner
+layers may import an outer one.
 
 ## Rules that must not be broken without asking the user first
 
 1. **`risk_gate()` stays pure.** No network, no file access, no clock of its
    own, no randomness, no LLM call. `now` is a parameter. This is what lets
-   the same function serve live trading, paper trading and a future backtest
+   the same function serve live trading, paper trading and the backtester
    without a second implementation.
 2. **`risk_gate()` is never `async`.**
 3. **Position size comes from the risk budget and the stop distance only.** A
@@ -53,12 +64,17 @@ The dependency direction is one-way: `cli → core → {strategies, brokers} →
    numbers, no bypass flag.
 8. **Secrets are `Secret` objects.** Never log, print, format or write a
    revealed credential. Call `.reveal()` only where the value is used.
-9. **The default test run is offline.** `pytest` must pass with no network, no
-   credentials and no exchange SDK installed. Anything that sends a real order
-   is marked `@pytest.mark.integration` and needs `--run-integration`.
-10. **Live trading needs an explicit flag.** `grvt.env: prod` or
+9. **Recording is never allowed to change what the bot does.** `trace.py`
+   gives the tracer slot up to anything else that wants it, keeps a ceiling
+   on what it stores, and goes away entirely with `--no-trace`. A bot whose
+   behaviour depended on whether it was being watched would be worth less
+   than one nobody could watch.
+10. **The default test run is offline.** `pytest` must pass with no network,
+    no credentials and no exchange SDK installed. Anything that sends a real
+    order is marked `@pytest.mark.integration` and needs `--run-integration`.
+11. **Live trading needs an explicit flag.** `grvt.env: prod` or
     `hyperliquid.network: mainnet` without `--live` must refuse to run.
-11. **The two Hyperliquid identities stay apart.** `account_address` is the
+12. **The two Hyperliquid identities stay apart.** `account_address` is the
     master account and is what every query uses; `api_wallet_key` only signs.
     Querying with the agent address returns an empty state with no error, so
     the config validates the address shape and refuses a key in that field.
@@ -71,6 +87,10 @@ The dependency direction is one-way: `cli → core → {strategies, brokers} →
 - A new strategy: subclass `Strategy`, implement `get_signal`, register it in
   `tradebot/strategies/__init__.py`, and write tests against synthetic prices.
   Never let a strategy call a broker.
+- Anything in `backtest/`: it may model how a market fills an order, and it may
+  not decide whether an order is allowed or how big it is. Those answers come
+  from `risk_gate()`, called with the same `BotConfig` the live run uses. A
+  backtest with its own sizing rule is a backtest of a bot you do not have.
 - A new exchange: implement the `Broker` protocol in `tradebot/brokers/`, keep
   reply parsing in pure module-level `read_*` functions, and test those with
   payload dictionaries rather than a live connection.
@@ -108,8 +128,10 @@ reason, documented in `docs/architecture.md`:
 - The strategy window is primed from real candles at start-up, then extended
   with observed marks. It is not a full candle series: strategies see closes,
   not OHLCV bars.
-- There is no backtester yet. The gate is pure precisely so one can be added
-  without touching it.
+- The backtester models fills, not the order book. A limit that the bar never
+  traded through does not fill, a bar holding both stop and target takes the
+  stop, and funding is not charged at all. It is deliberately pessimistic, and
+  still not the market.
 - The paper broker fills optimistically at the limit price. It proves the
   plumbing works; it says nothing about profitability.
 - Leverage: `HyperliquidBroker.set_leverage` exists, but the engine never

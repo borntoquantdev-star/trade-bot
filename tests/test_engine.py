@@ -479,3 +479,102 @@ def test_a_walk_refuses_silly_inputs():
         random_walk(0)
     with pytest.raises(ValueError):
         random_walk(100, "0")
+
+
+# --- the way out -------------------------------------------------------------
+
+
+class Exiter(ScriptedStrategy):
+    """Opens like the scripted strategy, and leaves when told to."""
+
+    def __init__(self, reason: str | None = "test asked", **kwargs):
+        super().__init__(**kwargs)
+        self.reason = reason
+        self.exits_asked = 0
+
+    def get_exit(self, market: MarketView) -> str | None:
+        self.exits_asked += 1
+        return self.reason
+
+
+def test_the_loop_can_close_a_position_not_only_open_one(tmp_path):
+    engine, broker, _ = make_engine(tmp_path, strategy=Exiter(reason=None))
+    engine.tick()
+    assert SYMBOL in broker.fetch_positions()
+
+    engine.strategy.reason = "target reached"
+    result = engine.tick()
+    assert result.exit_reason == "target reached"
+    assert result.exit_receipt is not None
+    assert broker.fetch_positions() == {}, "ปิดแล้วต้องไม่มีไม้ค้าง"
+
+
+def test_closing_is_not_asked_about_when_there_is_nothing_to_close(tmp_path):
+    engine, _, _ = make_engine(tmp_path, strategy=Exiter(side=None))
+    engine.tick()
+    assert engine.strategy.exits_asked == 0
+
+
+def test_a_halted_bot_can_still_get_out(tmp_path):
+    # A halt stops the bot taking new risk. If it also trapped the position
+    # the halt was meant to protect, the halt would be the danger.
+    engine, broker, _ = make_engine(tmp_path, strategy=Exiter(reason=None))
+    engine.tick()
+    engine.halt("daily loss limit")
+    engine.strategy.reason = "flattening after the halt"
+
+    result = engine.tick()
+    assert result.exit_reason == "flattening after the halt"
+    assert broker.fetch_positions() == {}
+
+
+def test_the_exit_is_written_down_with_its_reason(tmp_path):
+    engine, _, _ = make_engine(tmp_path, strategy=Exiter(reason=None))
+    engine.tick()
+    engine.strategy.reason = "price came back"
+    engine.tick()
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    closing = rows[-1]
+    assert closing["exit"]["reason"] == "price came back"
+    assert closing["exit"]["simulated"] is True
+    assert "order" not in closing, "ปิดไม้ไม่ใช่การเปิดไม้ใหม่"
+
+
+def test_opening_waits_until_the_next_tick_after_a_close(tmp_path):
+    # One action per iteration keeps the audit trail readable: a line that
+    # both closed and opened would hide which price did which.
+    engine, broker, ticks = make_engine(tmp_path, strategy=Exiter(reason=None))
+    engine.tick()
+    opened = broker.fetch_positions()[SYMBOL]
+
+    engine.strategy.reason = "out"
+    ticks["now"] += timedelta(seconds=1)
+    engine.tick()
+    assert broker.fetch_positions() == {}
+
+    # The clock has to move: a signal identical to one already sent is
+    # refused by the idempotency guard, which is the behaviour that stops a
+    # restart from doubling a position.
+    engine.strategy.reason = None
+    ticks["now"] += timedelta(seconds=1)
+    engine.tick()
+    reopened = broker.fetch_positions()[SYMBOL]
+    assert reopened.side == opened.side
+
+
+def test_a_strategy_that_explodes_on_the_way_out_does_not_trap_the_position(tmp_path):
+    class Exploding(Exiter):
+        def get_exit(self, market):
+            raise RuntimeError("exit exploded")
+
+    engine, broker, _ = make_engine(tmp_path, strategy=Exploding())
+    engine.tick()
+    # The tick survives, the position is still there, and the bot keeps going.
+    result = engine.tick()
+    assert result.exit_reason is None
+    assert SYMBOL in broker.fetch_positions()

@@ -1,9 +1,15 @@
 # The dashboard
 
-A pannable, zoomable canvas showing what the bot is doing right now: the
-market it sees, the signal the strategy produced, whether the risk gate
-approved it, and what reached the exchange — as cards wired together, updating
-the moment the bot records a new decision.
+A pannable, zoomable canvas with two tabs over the same machinery:
+
+- **live** — what the bot is doing right now: the market it sees, the signal
+  the strategy produced, whether the risk gate approved it, and what reached
+  the exchange, updating the moment the bot records a new decision.
+- **backtest** — what a replay produced: the equity curve, the result against
+  buy and hold, what the gate refused, and every round trip.
+
+Both are cards wired together on one canvas; each tab remembers its own card
+layout and camera.
 
 Cards can be dragged and their positions stick; a minimap and zoom bar sit in
 the bottom right, and a labelled group frame wraps the five pipeline stages.
@@ -13,6 +19,9 @@ tradebot --dry-run --paper-walk --iterations 60     # window 1: the bot
 node dashboard/server.js --open                     # window 2: the dashboard
 ```
 
+The backtest tab needs `logs/backtest.json`, which `tradebot --backtest`
+writes. Point elsewhere with `--backtest-file`.
+
 Thai usage guide: [dashboard/README.md](../dashboard/README.md).
 
 ## Why it reads files instead of talking to the bot
@@ -20,10 +29,12 @@ Thai usage guide: [dashboard/README.md](../dashboard/README.md).
 ```
 tradebot ──writes──> logs/audit.jsonl   one JSON line per decision
                      logs/state.json    day's start equity, peak, halt flag
+                     logs/backtest.json one replay's result
                            │
                            │  server.js tails the files (500ms poll)
                            ▼
                      SSE /api/stream ──> the page draws nodes, chart, log
+                       events: snapshot (live), backtest (replay)
 ```
 
 The bot already wrote everything down, because an audit trail was a
@@ -57,10 +68,29 @@ All thirteen reject codes have a plain-language explanation, and a test asserts
 none is missing — add a code to `RejectCode` without a translation and the
 dashboard tests fail.
 
+## The backtest tab
+
+`lib/backtest.js` is the second pure function, the same shape as the first:
+`logs/backtest.json` in, a view out, loaded by both the server and the browser.
+
+Two things it exists to do. Every number in that file is a **string**, because
+`report.to_dict` writes Decimals whole; this is the one place they become
+numbers, and a `null` meaning "could not be measured" must not arrive as a `0`
+meaning "measured zero". And the equity curve carries one point per bar, which
+for a year of 5m candles is 115,199 points in an 11 MB file: it is thinned to
+a few hundred points **on the server**, keeping each stretch's lowest and
+highest point, so the wire stays small and no drawdown is smoothed away.
+
+Judgements stay on the Python side and travel as codes. `no_trade_reason`
+says which dead end a run hit, and `thin_sample_below` carries the threshold
+under which a sample is an anecdote; the console words them in English and the
+dashboard in Thai, from one ladder of conditions. Reject codes reuse the same
+translation table as the live tab.
+
 ## Where the look comes from
 
-Reverse-engineered from **Trade Bot Designer**, a Tauri canvas app for
-designing bots by interview. Four things were worth lifting:
+The mechanics were reverse-engineered from **Trade Bot Designer**, a Tauri
+canvas app for designing bots by interview. Four things were worth lifting:
 
 | From that app | Used here |
 |---|---|
@@ -72,9 +102,35 @@ designing bots by interview. Four things were worth lifting:
 | `spark()` | the price chart: one SVG polyline, no chart library |
 | minimap, zoom bar, status strip | the same bottom-corner furniture |
 
-Its tokens came along too (`--accent #5fb4ff`, `--ok #5fd39a`,
-`--warn #ffd166`, `--bad #ff8a8a` on a `#0b0b0b` canvas), so the two feel like
-one family.
+## The visual language
+
+The surface is styled after **Symvibe's board**: a warm near-black canvas with
+a dotted grid, chrome that floats as rounded islands rather than solid bars
+pinned to the edges, hairline borders at a tenth of an alpha, and monospace for
+anything a person reads as a value - numbers, times, ids, commands.
+
+| token | |
+|---|---|
+| `--canvas #14110e`, `--surface #1a1612` | warm, not blue-black |
+| `--text #f1e9dd`, `--muted #cdc2b3`, `--dim #8b7e72` | cream, not blue-white |
+| `--accent #ff6b3d` | orange |
+| `--ok #5fbe86`, `--warn #e8a33d`, `--bad #f0564d` | status |
+
+**Orange means "system", never "money".** The selected tab, the held tool, a
+wire with data moving through it. Status is green, amber and red on their own
+scale. Mixing them would put the colour for "this is selected" next to the
+colour for "this lost money", which is the one confusion a trading dashboard
+cannot afford - and it is why the live price chart is drawn in plain cream: a
+price is not a profit.
+
+The chrome floats because that is the whole of the phrase *infinite board* -
+the canvas runs under everything and has no edge to find. Gaps between the
+islands pass pointer events through, so you can drag the board from anywhere
+the islands are not.
+
+No webfont is loaded. The page binds to `127.0.0.1` and has to open with the
+network down, so it uses the system sans for Thai prose and the system
+monospace for values.
 
 What that app did **not** have is live data — it is a simulator. Here the same
 shapes are driven by a bot that really ran.
@@ -96,5 +152,7 @@ upgraded inside a repository whose point is a trustworthy risk gate.
 - It can lag the bot by one poll interval (500ms default).
 - It keeps the last 2,000 rows in memory; older decisions stay in the file.
 - The chart is the price **the bot saw when deciding**, not an OHLC chart.
+- The backtest tab shows one saved file. It does not run anything, compare two
+  runs, or keep a history of them.
 - No authentication — which is why it binds to `127.0.0.1` only. Serving it on
   `0.0.0.0` exposes your equity and positions to the network.

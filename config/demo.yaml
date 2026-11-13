@@ -1,0 +1,41 @@
+# โหมดลองของ — ดูว่าเครื่องทำงานไหม ไม่ใช่ดูว่ากำไรไหม
+#
+#   tradebot --dry-run --config config/demo.yaml
+#
+# ไม่ต้องมี API key ใดๆ ทั้งสิ้น ราคาจริงจากตลาด แต่ออเดอร์เป็นกระดาษ
+# กลยุทธ์ ping_pong ตั้งใจให้ "เข้า-ออกถี่" เพื่อให้เห็นทั้งสายพานทำงานใน 10 นาที
+# มันขาดทุนเท่าค่าธรรมเนียมโดยออกแบบ ห้ามเอาไปใช้กับเงินจริง
+
+exchange: "grvt"
+
+grvt:
+  env: "testnet"
+  api_key: ""
+  private_key: ""
+  trading_account_id: ""
+  sub_account_id: "0"
+
+trading:
+  symbol: "BTC_USDT_Perp"
+
+  # แท่ง 1 นาทีใช้อุ่นเครื่อง ค่าเฉลี่ยจึงพร้อมตั้งแต่รอบแรก ไม่ต้องรอ 20 รอบ
+  timeframe: "1m"
+  warmup_candles: 60
+
+  # ทุก 5 วินาทีหนึ่งรอบ ช้ากว่านี้จะไม่ทันเห็นอะไรในคาบเรียน
+  loop_interval: 5
+  strategy: "ping_pong"
+
+risk:
+  # เล็กทุกอย่าง เพราะเป้าหมายคือดูกลไก ไม่ใช่ดูตัวเลข
+  risk_per_trade_pct: 0.5
+  max_positions: 1
+  max_daily_loss_pct: 3.0
+  max_drawdown_pct: 10.0
+  max_leverage: 5
+  max_slippage_pct: 0.1
+
+  # ค่าธรรมเนียมจริงของ taker ใส่ไว้ให้เห็นว่ามันกินกำไรแค่ไหน
+  fee_rate_pct: 0.05
+  allow_short: true
+  starting_equity_usdt: 10000

@@ -1,0 +1,63 @@
+[package]
+name = "board"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Infinite board for watching a tradebot: live pipeline, backtest and the market"
+
+# cdylib is what wasm-bindgen needs for the browser build; rlib keeps the
+# native binary and the probe example able to use the same code.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# The native window gets its own target name so trunk is not left choosing
+# between two artifacts both called "board".
+[[bin]]
+name = "board-native"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+eframe = { version = "0.37", default-features = false, features = [
+    "default_fonts",
+    "glow",
+] }
+egui = "0.37"
+
+# Minimal HTTP client that works the same natively and in the browser, so the
+# candle fetch is one code path rather than two.
+ehttp = "0.7"
+
+# WebSocket that works the same natively and in the browser. The browser can
+# open GRVT's public market-data stream directly, so no relay is needed.
+# "tls" is needed only by the native build; the browser build uses the page's
+# own WebSocket, which already has TLS.
+ewebsock = { version = "0.8", features = ["tls"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11"
+# rustls 0.23 refuses to pick a crypto backend for you unless exactly one is
+# compiled in. Naming "ring" here is what makes the native TLS handshake work;
+# the browser build never sees this crate.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "Window",
+    # Where the layout is kept in the browser: see src/store.rs.
+    "Storage",
+] }
+console_error_panic_hook = "0.1"
+
+[[example]]
+name = "probe"
+path = "examples/probe.rs"

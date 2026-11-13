@@ -3,9 +3,16 @@
     tradebot --dry-run                 paper trade, no credentials needed
     tradebot --doctor                  check the config and the connection
     tradebot --list-strategies         what is registered
+    tradebot --fetch-candles           download price history into data/candles
+    tradebot --backtest                replay that history, offline
     tradebot --live                    real orders (prod requires this flag)
     tradebot --resume                  clear a halt written by the risk gate
     tradebot --close --yes             flatten the configured symbol
+
+``--backtest`` never opens a connection: it reads the stored candles and runs
+them through the same risk gate the live engine uses.  ``--fetch-candles``
+does connect, but only to read - it cannot place an order, so it does not need
+``--live``.
 
 ``--dry-run`` is the default when ``hyperliquid.network`` is ``testnet`` and no ``--live``
 flag is given, so the accident path leads to the paper broker rather than to
@@ -18,13 +25,19 @@ import argparse
 import logging
 import sys
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .. import __version__
+from .. import __version__, runs
+from ..backtest import run_backtest, summary, trade_table, write_json
+from ..backtest.runner import BacktestError
 from ..brokers.base import BrokerError
 from ..brokers.paper import PaperBroker, fixed_price, random_walk
+from ..brokers.public_price import live_mark_price
 from ..core.config import BotConfig, ConfigError, describe, load_config
 from ..core.engine import Engine
+from ..data.fetch import download
+from ..data.store import DEFAULT_ROOT, CandleStore
 from ..money import D
 from ..strategies import UnknownStrategy, build_strategy, describe_strategies
 from ..utils.logger import setup_logger
@@ -60,6 +73,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--iterations", type=int, default=None, help="stop after N loops (default: run forever)"
     )
+    parser.add_argument(
+        "--runs-file",
+        default="logs/runs.jsonl",
+        help="one line when a run starts and one when it ends",
+    )
+    parser.add_argument(
+        "--trace",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="record which lines of the bot ran, into the audit trail (default: on)",
+    )
 
     mode = parser.add_argument_group("mode")
     mode.add_argument(
@@ -74,6 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mode.add_argument("--paper-price", default="100000", help="starting price for the paper broker")
     mode.add_argument(
+        "--paper-live",
+        action="store_true",
+        help="paper trade on the real market price (public feed, no credentials)",
+    )
+    mode.add_argument(
         "--paper-walk",
         nargs="?",
         const="0.08",
@@ -81,6 +110,36 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PCT",
         help="let the paper price wander by up to PCT%% per iteration "
         "(default 0.08), so a dry run actually moves",
+    )
+
+    history = parser.add_argument_group("price history and backtesting")
+    history.add_argument(
+        "--fetch-candles",
+        action="store_true",
+        help="download candle history for the configured symbol, then exit",
+    )
+    history.add_argument(
+        "--backtest",
+        action="store_true",
+        help="replay the stored candles through the risk gate, then exit",
+    )
+    history.add_argument(
+        "--days", type=int, default=365, help="how far back to fetch or test (default: 365)"
+    )
+    history.add_argument(
+        "--since", default=None, metavar="YYYY-MM-DD", help="start date, instead of --days"
+    )
+    history.add_argument(
+        "--data-dir", default=str(DEFAULT_ROOT), help=f"candle store (default: {DEFAULT_ROOT})"
+    )
+    history.add_argument(
+        "--refresh", action="store_true", help="re-download bars the store already has"
+    )
+    history.add_argument("--trades", action="store_true", help="list the backtest's round trips")
+    history.add_argument(
+        "--backtest-out",
+        default="logs/backtest.json",
+        help="where to write the machine-readable result",
     )
 
     actions = parser.add_argument_group("one-shot actions")
@@ -123,11 +182,17 @@ def _make_broker(
     log: logging.Logger,
     paper_price: str = "100000",
     paper_walk: str | None = None,
+    paper_live: bool = False,
 ):
     if paper:
-        source = (
-            random_walk(D(paper_price), paper_walk) if paper_walk else fixed_price(D(paper_price))
-        )
+        if paper_live:
+            # Real prices, paper fills, no credentials: the public feed the
+            # board already draws from.
+            source = live_mark_price(config.exchange, config.venue_name, logger=log)
+        elif paper_walk:
+            source = random_walk(D(paper_price), paper_walk)
+        else:
+            source = fixed_price(D(paper_price))
         return PaperBroker(
             price_source=source,
             instrument=config.instrument,
@@ -155,6 +220,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if config is None:
         return 2
 
+    if args.backtest:
+        # Deliberately before the broker is built: a backtest reads the disk
+        # and nothing else, so it works with no credentials and no network.
+        return _backtest(config, args, log)
+
     # Decide paper vs live, and refuse to touch production by accident.
     paper = args.dry_run or not args.live
     if config.is_live and not args.live:
@@ -179,10 +249,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.info("dashboard: node dashboard/server.js --open  (reads logs/, never trades)")
 
     try:
-        broker = _make_broker(config, paper, log, args.paper_price, args.paper_walk)
+        broker = _make_broker(
+            config, paper, log, args.paper_price, args.paper_walk, args.paper_live
+        )
     except (BrokerError, ConfigError) as exc:
         log.error("%s", exc)
         return 2
+
+    if args.fetch_candles:
+        return _fetch_candles(config, broker, args, log, paper)
 
     try:
         strategy = build_strategy(args.strategy or config.trading.strategy, config, log)
@@ -197,6 +272,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger=log,
         state_path=Path(args.state_file) if args.state_file else None,
         audit_path=Path(args.audit_file) if args.audit_file else None,
+        trace=args.trace,
     )
 
     if args.resume:
@@ -211,7 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.doctor:
-        return _doctor(engine, log)
+        return _doctor(engine, log, paper=paper, has_keys=config.has_credentials)
 
     if args.close:
         if not args.yes:
@@ -230,14 +306,201 @@ def main(argv: Sequence[str] | None = None) -> int:
             config.risk.max_leverage,
         )
 
-    return engine.run(max_iterations=args.iterations)
+    # A run is bracketed rather than inferred from gaps in the audit
+    # trail: a gap means "stopped and restarted" only if you already know
+    # the loop interval, and the machine did not sleep, and the clock did
+    # not move.
+    runs_path = Path(args.runs_file) if args.runs_file else None
+    run_id = runs.started(
+        runs_path,
+        runs.Start(
+            strategy=args.strategy or config.trading.strategy,
+            exchange=config.exchange,
+            symbol=config.trading.symbol,
+            timeframe=config.trading.timeframe,
+            mode="paper" if paper else f"{config.exchange} {config.venue_name}",
+            config=args.config,
+            iterations=args.iterations,
+        ),
+    )
+    reason = "stopped"
+    try:
+        code = engine.run(max_iterations=args.iterations)
+        reason = "halted" if engine.state.halted else "finished"
+        return code
+    except BaseException as exc:  # including KeyboardInterrupt
+        reason = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        runs.finished(
+            runs_path,
+            run_id,
+            ticks=engine.ticks,
+            orders=engine.orders,
+            exits=engine.exits,
+            rejects=engine.rejects,
+            first_equity=engine.first_equity,
+            last_equity=engine.last_equity,
+            halted=engine.state.halted,
+            reason=reason,
+        )
 
 
-def _doctor(engine: Engine, log: logging.Logger) -> int:
-    """Read-only health check: config, connection, market, account."""
+def _window(args: argparse.Namespace, log: logging.Logger) -> tuple[datetime, datetime] | None:
+    """The period to fetch or test, as UTC bounds."""
+    end = datetime.now(timezone.utc)
+    if args.since:
+        try:
+            start = datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc)
+        except ValueError:
+            log.error("--since wants a date like 2025-01-31, got %r", args.since)
+            return None
+        if start >= end:
+            log.error("--since %s is not in the past", args.since)
+            return None
+        return start, end
+    if args.days <= 0:
+        log.error("--days must be positive, got %s", args.days)
+        return None
+    return end - timedelta(days=args.days), end
+
+
+def _fetch_candles(
+    config: BotConfig,
+    broker,
+    args: argparse.Namespace,
+    log: logging.Logger,
+    paper: bool,
+) -> int:
+    """Download price history into the candle store.  Reads only."""
+    window = _window(args, log)
+    if window is None:
+        return 2
+    start, end = window
+    symbol = config.trading.symbol
+    interval = config.trading.timeframe
+
+    if paper:
+        log.warning(
+            "the paper broker invents its candles. They exercise the download "
+            "path and tell you NOTHING about the market. Drop --dry-run and "
+            "supply credentials for real history."
+        )
+
+    try:
+        broker.connect()
+    except (BrokerError, ConfigError) as exc:
+        log.error("could not connect: %s", exc)
+        return 2
+
+    store = CandleStore(args.data_dir)
+    log.info(
+        "fetching %s %s from %s to %s",
+        symbol,
+        interval,
+        start.date().isoformat(),
+        end.date().isoformat(),
+    )
+    try:
+        report = download(
+            broker,
+            store,
+            symbol,
+            interval,
+            start,
+            end,
+            exchange=config.exchange,
+            log=log,
+            refresh=args.refresh,
+            on_page=lambda r: log.info("  %s bars so far", r.fetched),
+        )
+    except (BrokerError, TypeError, ValueError) as exc:
+        log.error("fetch failed: %s", exc)
+        return 2
+
+    log.info("%s", report.describe())
+    log.info("stored at %s", store.path_for(config.exchange, symbol, interval))
+    if report.gaps:
+        log.warning(
+            "the history has holes. A backtest will skip them rather than "
+            "invent prices, but the result covers less time than it looks."
+        )
+    log.info("next: tradebot --backtest --days %s", args.days)
+    return 0
+
+
+def _backtest(config: BotConfig, args: argparse.Namespace, log: logging.Logger) -> int:
+    """Replay stored candles through the real risk gate.  Offline."""
+    window = _window(args, log)
+    if window is None:
+        return 2
+    start, end = window
+    symbol = config.trading.symbol
+    interval = config.trading.timeframe
+
+    store = CandleStore(args.data_dir)
+    candles = store.load(config.exchange, symbol, interval, start, end)
+    if not candles:
+        coverage = store.coverage(config.exchange, symbol, interval)
+        log.error("no stored candles for %s %s in that period.", symbol, interval)
+        log.error("  store: %s", coverage.describe())
+        log.error("  fix:   tradebot --fetch-candles --days %s", args.days)
+        return 2
+
+    try:
+        strategy = build_strategy(args.strategy or config.trading.strategy, config, log)
+    except UnknownStrategy as exc:
+        log.error("%s", exc)
+        return 2
+
+    try:
+        result = run_backtest(candles, strategy, config, log=log, exchange=config.exchange)
+    except BacktestError as exc:
+        log.error("%s", exc)
+        return 2
+
+    print(summary(result))
+    if args.trades:
+        print()
+        print(trade_table(result.trades))
+    if args.backtest_out:
+        written = write_json(result, args.backtest_out)
+        print()
+        print(f"machine-readable result: {written}")
+    return 0
+
+
+def _doctor(
+    engine: Engine,
+    log: logging.Logger,
+    paper: bool = True,
+    has_keys: bool = False,
+) -> int:
+    """Read-only health check: config, connection, market, account.
+
+    Says which broker it asked.  Without that line a run with no credentials
+    answers "all good" about the paper broker, and the person reading it
+    believes their exchange account is connected - the one conclusion this
+    command exists to prevent.
+    """
     symbol = engine.config.trading.symbol
     problems = 0
     log.info("--- doctor ---")
+    if paper:
+        log.info("broker       paper (offline simulator), not %s", engine.config.venue_name)
+        if not has_keys:
+            log.warning(
+                "no credentials in this config, so nothing here proves your %s "
+                "account works. Fill the keys in, then run: tradebot --doctor "
+                "--live --config <file>",
+                engine.config.exchange,
+            )
+    else:
+        log.info(
+            "broker       %s %s (live connection)",
+            engine.config.exchange,
+            engine.config.venue_name,
+        )
     try:
         price = engine.broker.fetch_mark_price(symbol)
         log.info("price        %s = %s", symbol, price)
