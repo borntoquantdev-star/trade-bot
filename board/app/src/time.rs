@@ -56,6 +56,12 @@ impl Local {
 /// here that omits it is writing UTC. Anything else is `None`, and callers
 /// print the original text rather than a wrong time.
 pub fn local(iso: &str) -> Option<Local> {
+    Some(from_seconds(utc_seconds(iso)? + OFFSET_HOURS * 3600))
+}
+
+/// Seconds since 1970-01-01 UTC, for putting two timestamps in order
+/// whatever offset each was written with.
+pub fn utc_seconds(iso: &str) -> Option<i64> {
     let iso = iso.trim();
     let (date, rest) = iso.split_once('T').or_else(|| iso.split_once(' '))?;
     let mut date_parts = date.split('-');
@@ -78,10 +84,8 @@ pub fn local(iso: &str) -> Option<Local> {
     }
 
     let days = days_from_civil(year, month, day);
-    let mut seconds = days * 86_400 + hour * 3600 + minute * 60 + second;
-    seconds -= offset_minutes * 60; // to UTC
-    seconds += OFFSET_HOURS * 3600; // to Thai time
-    Some(from_seconds(seconds))
+    let seconds = days * 86_400 + hour * 3600 + minute * 60 + second;
+    Some(seconds - offset_minutes * 60)
 }
 
 /// `16:47:11+00:00` -> (`16:47:11`, 0). `Z` and a missing offset are both 0.
@@ -254,6 +258,15 @@ mod tests {
         }
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+    }
+
+    #[test]
+    fn two_spellings_of_one_moment_are_the_same_second() {
+        assert_eq!(
+            utc_seconds("2026-11-13T16:47:11+00:00"),
+            utc_seconds("2026-11-13T23:47:11+07:00")
+        );
+        assert_eq!(utc_seconds("2026-11-13T16:47:11Z"), Some(1_794_588_431));
     }
 
     #[test]

@@ -55,9 +55,30 @@ pub struct Run {
     pub halted: bool,
     #[serde(default)]
     pub reason: String,
+    /// Worked out from a silence in the audit trail rather than written down
+    /// by the bot: what a trail older than the run log has instead of one.
+    #[serde(default)]
+    pub inferred: bool,
 }
 
 impl Run {
+    /// Does this run cover the moment `at`?
+    ///
+    /// A run still going has no end yet, so it covers everything after its
+    /// start.
+    pub fn covers(&self, at: &str) -> bool {
+        let (Some(start), Some(moment)) = (
+            crate::time::utc_seconds(&self.started_at),
+            crate::time::utc_seconds(at),
+        ) else {
+            return false;
+        };
+        match crate::time::utc_seconds(&self.ended_at) {
+            Some(end) => moment >= start && moment <= end,
+            None => moment >= start,
+        }
+    }
+
     /// `23:47` in Thai time out of an ISO timestamp, or an empty string.
     pub fn clock(at: &str) -> String {
         crate::time::hhmm(at)

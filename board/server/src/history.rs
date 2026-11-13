@@ -29,14 +29,21 @@ const RUN_CAP: usize = 200;
 const DAY_CAP: usize = 200;
 
 pub async fn runs(State(config): State<Config>) -> Json<Value> {
-    let path = config.logs.join("runs.jsonl");
-    let Ok(text) = tokio::fs::read_to_string(&path).await else {
+    let recorded = tokio::fs::read_to_string(config.logs.join("runs.jsonl"))
+        .await
+        .unwrap_or_default();
+    let trail = tokio::fs::read_to_string(config.logs.join("audit.jsonl"))
+        .await
+        .unwrap_or_default();
+    if recorded.trim().is_empty() && trail.trim().is_empty() {
         return Json(json!({
             "present": false,
-            "reason": format!("ยังไม่มี {} · รันบอทหนึ่งรอบแล้วจะมีประวัติ", path.display()),
+            "reason": "ยังไม่มีทั้งสมุดรอบการรันและ audit · รันบอทหนึ่งรอบแล้วจะมีประวัติ",
         }));
-    };
-    Json(collect_runs(&text))
+    }
+    let mut value = collect_runs(&recorded);
+    merge_inferred(&mut value, &trail);
+    Json(value)
 }
 
 pub async fn days(State(config): State<Config>) -> Json<Value> {
@@ -136,6 +143,212 @@ pub fn collect_runs(text: &str) -> Value {
     })
 }
 
+/// The shortest silence that counts as "the bot stopped and was started
+/// again", in seconds. Two minutes, or five ticks of the trail's own usual
+/// pace, whichever is longer - so a bot looping every five minutes is not
+/// split at every tick.
+const GAP_FLOOR: i64 = 120;
+const GAP_TICKS: i64 = 5;
+
+/// Add the runs the audit trail shows that no line of the run log covers.
+///
+/// The run log only exists from the version of the bot that writes it; a
+/// trail older than that would otherwise have no history at all. Those
+/// runs are found by the silences between ticks and marked `inferred`,
+/// because a silence is evidence of a stop, not a record of one. What they
+/// ran is read off the trace where there is one - the strategy file the
+/// tick went into - and left empty where there is not.
+pub fn merge_inferred(value: &mut Value, trail: &str) {
+    let recorded: Vec<(i64, Option<i64>)> = value["runs"]
+        .as_array()
+        .map(|runs| {
+            runs.iter()
+                .filter_map(|run| {
+                    let start = epoch_seconds(run["started_at"].as_str()?)?;
+                    let end = run["ended_at"].as_str().and_then(epoch_seconds);
+                    Some((start, end))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let sessions = sessions_of(trail);
+    let mut added: Vec<Value> = Vec::new();
+    for session in sessions {
+        let covered = recorded.iter().any(|(start, end)| {
+            *start <= session.last && end.map(|end| end >= session.first).unwrap_or(true)
+        });
+        if !covered {
+            added.push(session.into_json());
+        }
+    }
+    if added.is_empty() {
+        return;
+    }
+    let Some(runs) = value["runs"].as_array_mut() else {
+        return;
+    };
+    runs.extend(added);
+    // Newest first across both kinds, by when they started.
+    runs.sort_by_key(|run| {
+        std::cmp::Reverse(
+            run["started_at"]
+                .as_str()
+                .and_then(epoch_seconds)
+                .unwrap_or(i64::MIN),
+        )
+    });
+    runs.truncate(RUN_CAP);
+    let total = runs.len();
+    value["total"] = json!(total);
+}
+
+/// One stretch of the trail with no long silence in it.
+#[derive(Debug, Default)]
+struct Session {
+    first: i64,
+    last: i64,
+    started_at: String,
+    ended_at: String,
+    ticks: u64,
+    orders: u64,
+    exits: u64,
+    rejects: u64,
+    first_equity: String,
+    last_equity: String,
+    paper: bool,
+    live: bool,
+    strategy: String,
+}
+
+impl Session {
+    fn into_json(self) -> Value {
+        let change = match (
+            self.first_equity.parse::<f64>(),
+            self.last_equity.parse::<f64>(),
+        ) {
+            (Ok(first), Ok(last)) => Some(last - first),
+            _ => None,
+        };
+        let mode = match (self.live, self.paper) {
+            (true, false) => "live",
+            (false, true) => "paper",
+            (true, true) => "live + paper",
+            (false, false) => "",
+        };
+        json!({
+            "id": format!("audit-{}", self.first),
+            "inferred": true,
+            "finished": true,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "strategy": self.strategy,
+            "mode": mode,
+            "ticks": self.ticks,
+            "orders": self.orders,
+            "exits": self.exits,
+            "rejects": self.rejects,
+            "first_equity": self.first_equity,
+            "last_equity": self.last_equity,
+            "change": change,
+            "halted": false,
+            "reason": "เดาจากช่วงเงียบใน audit",
+        })
+    }
+}
+
+/// Cut the trail at every silence long enough to be a stop.
+fn sessions_of(trail: &str) -> Vec<Session> {
+    let rows: Vec<(i64, Value)> = trail
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|row| Some((epoch_seconds(row.get("at")?.as_str()?)?, row)))
+        .collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut gaps: Vec<i64> = rows.windows(2).map(|pair| pair[1].0 - pair[0].0).collect();
+    gaps.sort_unstable();
+    let usual = gaps.get(gaps.len() / 2).copied().unwrap_or(0);
+    let gap = GAP_FLOOR.max(usual * GAP_TICKS);
+
+    let mut out: Vec<Session> = Vec::new();
+    let mut previous: Option<i64> = None;
+    for (seconds, row) in rows {
+        let new_session = match previous {
+            Some(before) => seconds - before > gap,
+            None => true,
+        };
+        if new_session {
+            out.push(Session {
+                first: seconds,
+                started_at: text(&row, "at"),
+                ..Default::default()
+            });
+        }
+        let session = out.last_mut().expect("a session was just started");
+        session.last = seconds;
+        session.ended_at = text(&row, "at");
+        session.ticks += 1;
+        if row.get("order").is_some() {
+            session.orders += 1;
+        }
+        if row.get("exit").is_some() {
+            session.exits += 1;
+        }
+        if row.get("reject").is_some() {
+            session.rejects += 1;
+        }
+        if let Some(receipt) = row.get("receipt") {
+            if receipt["simulated"].as_bool().unwrap_or(false) {
+                session.paper = true;
+            } else {
+                session.live = true;
+            }
+        }
+        let equity = text(&row, "equity");
+        if equity.parse::<f64>().map(|e| e > 0.0).unwrap_or(false) {
+            if session.first_equity.is_empty() {
+                session.first_equity = equity.clone();
+            }
+            session.last_equity = equity;
+        }
+        if session.strategy.is_empty() {
+            session.strategy = strategy_in(&row);
+        }
+        previous = Some(seconds);
+    }
+    out
+}
+
+fn text(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// The strategy a tick ran, read off the strategy file its trace entered:
+/// `tradebot/strategies/ping_pong.py` -> `ping_pong`. The base class is
+/// not a strategy, so it does not count.
+fn strategy_in(row: &Value) -> String {
+    let Some(calls) = row
+        .pointer("/trace/calls")
+        .and_then(|calls| calls.as_array())
+    else {
+        return String::new();
+    };
+    calls
+        .iter()
+        .filter_map(|call| call["file"].as_str())
+        .filter_map(|file| file.strip_prefix("tradebot/strategies/"))
+        .filter_map(|file| file.strip_suffix(".py"))
+        .find(|name| *name != "base" && *name != "__init__")
+        .map(|name| name.trim_end_matches("_strategy").to_string())
+        .unwrap_or_default()
+}
+
 fn change_of(run: &Map<String, Value>) -> Option<f64> {
     let first: f64 = run.get("first_equity")?.as_str()?.parse().ok()?;
     let last: f64 = run.get("last_equity")?.as_str()?.parse().ok()?;
@@ -227,6 +440,15 @@ pub fn collect_days(text: &str, offset: i64) -> Value {
 /// this project's writers only ever mean as UTC) and moves it `offset`
 /// hours east. `None` for anything that is not a timestamp.
 pub fn local_date(at: &str, offset: i64) -> Option<String> {
+    let seconds = epoch_seconds(at)? + offset * 3600;
+    let (y, m, d) = civil_from_days(seconds.div_euclid(86_400));
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// Seconds since 1970-01-01 UTC for an ISO timestamp, reading its own
+/// offset (`Z`, `+00:00`, `+0000`, or none - which this project's writers
+/// only ever mean as UTC).
+pub fn epoch_seconds(at: &str) -> Option<i64> {
     let (date, rest) = at.trim().split_once('T')?;
     let mut parts = date.split('-');
     let year: i64 = parts.next()?.parse().ok()?;
@@ -256,10 +478,16 @@ pub fn local_date(at: &str, offset: i64) -> Option<String> {
     let mut clock_parts = clock.split(':');
     let hour: i64 = clock_parts.next()?.parse().ok()?;
     let minute: i64 = clock_parts.next()?.parse().ok()?;
-    let minutes =
-        days_from_civil(year, month, day) * 1440 + hour * 60 + minute - written + offset * 60;
-    let (y, m, d) = civil_from_days(minutes.div_euclid(1440));
-    Some(format!("{y:04}-{m:02}-{d:02}"))
+    let second: i64 = clock_parts
+        .next()
+        .and_then(|part| part.split('.').next())
+        .unwrap_or("0")
+        .parse()
+        .ok()?;
+    Some(
+        days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second
+            - written * 60,
+    )
 }
 
 /// Days since 1970-01-01. Howard Hinnant's algorithm, the same one the
@@ -474,5 +702,92 @@ mod tests {
     fn a_timestamp_that_is_not_one_has_no_date() {
         assert_eq!(local_date("nonsense", 7), None);
         assert_eq!(local_date("2026-13-01T00:00:00Z", 7), None);
+    }
+
+    // ------------------------------------------------- runs from the trail
+
+    /// Two sessions an hour apart, the second one trading.
+    const TWO_SESSIONS: &str = r#"{"at":"2026-11-13T08:59:00+00:00","equity":"10000"}
+{"at":"2026-11-13T08:59:05+00:00","equity":"10000"}
+{"at":"2026-11-13T08:59:10+00:00","equity":"10000"}
+{"at":"2026-11-13T16:47:06+00:00","equity":"9966.40","trace":{"calls":[{"file":"tradebot/strategies/base.py"},{"file":"tradebot/strategies/ping_pong.py"}]}}
+{"at":"2026-11-13T16:47:11+00:00","equity":"9966.40","order":{"qty":"0.145"},"receipt":{"simulated":false}}
+{"at":"2026-11-13T16:48:01+00:00","equity":"9957.44","exit":{"reason":"back"}}
+"#;
+
+    #[test]
+    fn a_trail_with_no_run_log_still_has_a_history() {
+        let mut value = collect_runs("");
+        merge_inferred(&mut value, TWO_SESSIONS);
+        let runs = value["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "split at the long silence");
+        assert!(runs.iter().all(|run| run["inferred"] == true));
+    }
+
+    #[test]
+    fn an_inferred_run_says_what_it_did_and_what_it_ran() {
+        let mut value = collect_runs("");
+        merge_inferred(&mut value, TWO_SESSIONS);
+        let newest = &value["runs"][0];
+        assert_eq!(newest["started_at"], "2026-11-13T16:47:06+00:00");
+        assert_eq!(newest["ticks"], 3);
+        assert_eq!(newest["orders"], 1);
+        assert_eq!(newest["exits"], 1);
+        assert_eq!(newest["mode"], "live", "a receipt that was not simulated");
+        assert_eq!(
+            newest["strategy"], "ping_pong",
+            "read off the trace, not guessed"
+        );
+        let change = newest["change"].as_f64().unwrap();
+        assert!((change - -8.96).abs() < 1e-6, "{change}");
+    }
+
+    #[test]
+    fn a_session_with_no_trace_does_not_invent_a_strategy() {
+        let mut value = collect_runs("");
+        merge_inferred(&mut value, TWO_SESSIONS);
+        assert_eq!(value["runs"][1]["strategy"], "");
+    }
+
+    /// Where the run log covers a stretch of the trail, the log is the
+    /// record and the silence-guess must not appear beside it.
+    #[test]
+    fn a_stretch_the_run_log_covers_is_not_guessed_at_twice() {
+        let log = r#"{"id":"aaa","event":"start","at":"2026-11-13T16:47:00+00:00","strategy":"ping_pong"}
+{"id":"aaa","event":"end","at":"2026-11-13T16:48:05+00:00","ticks":3}
+"#;
+        let mut value = collect_runs(log);
+        merge_inferred(&mut value, TWO_SESSIONS);
+        let runs = value["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "the logged run and the older guessed one");
+        assert_eq!(runs[0]["id"], "aaa", "the record, not a guess");
+        assert_eq!(runs[1]["inferred"], true);
+    }
+
+    /// A bot looping every five minutes is not stopped between ticks.
+    #[test]
+    fn a_slow_bot_is_not_split_at_every_tick() {
+        let slow: String = (0..6)
+            .map(|index| {
+                format!(
+                    "{{\"at\":\"2026-11-13T{:02}:00:00+00:00\",\"equity\":\"1\"}}\n",
+                    10 + index
+                )
+            })
+            .collect();
+        // Hourly ticks: the usual gap is an hour, so the cut is five hours.
+        let mut value = collect_runs("");
+        merge_inferred(&mut value, &slow);
+        assert_eq!(value["runs"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn seconds_since_the_epoch_read_every_offset_spelling() {
+        let want = Some(1_794_588_431);
+        assert_eq!(epoch_seconds("2026-11-13T16:47:11+00:00"), want);
+        assert_eq!(epoch_seconds("2026-11-13T16:47:11.971602+00:00"), want);
+        assert_eq!(epoch_seconds("2026-11-13T16:47:11Z"), want);
+        assert_eq!(epoch_seconds("2026-11-13T23:47:11+07:00"), want);
+        assert_eq!(epoch_seconds("nonsense"), None);
     }
 }

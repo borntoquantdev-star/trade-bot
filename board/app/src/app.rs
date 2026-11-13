@@ -141,6 +141,8 @@ pub struct Board {
     /// Replay the newest order as soon as the trail arrives. Set by the
     /// `order` link, which is asked for before there is a trail to look in.
     replay_order_on_load: bool,
+    /// Why pressing a run did not open it, until the next press.
+    run_note: Option<String>,
     /// When the walk was paused, if it is.
     ///
     /// The head's position is worked out from the clock rather than stored,
@@ -275,6 +277,7 @@ impl Default for Board {
             paused_at: None,
             replay: None,
             replay_order_on_load: false,
+            run_note: None,
             seen_tick: String::new(),
             seen_at: 0.0,
             selected: BTreeSet::new(),
@@ -2536,6 +2539,9 @@ impl Board {
         } else {
             format!("{} รอบ", runs.len())
         };
+        let shown_at = self.shown().map(|(_, row)| row.at.clone());
+        let note = self.run_note.clone();
+        let mut chosen: Option<usize> = None;
         card::show(
             ui,
             &mut slot,
@@ -2551,19 +2557,70 @@ impl Board {
                     ui.label(egui::RichText::new(reason).size(10.5).color(theme::DIM));
                     return;
                 }
+                if let Some(note) = &note {
+                    ui.label(egui::RichText::new(note).size(10.0).color(theme::WARN));
+                }
                 columns(ui, "เริ่ม · นาน", "กลยุทธ์ · ที่ไหน", "ผล");
                 ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical()
                     .id_salt("runs")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for run in &runs {
-                            run_row(ui, run);
+                        for (index, run) in runs.iter().enumerate() {
+                            let here = shown_at
+                                .as_deref()
+                                .map(|at| run.covers(at))
+                                .unwrap_or(false);
+                            if run_row(ui, run, here)
+                                .on_hover_text("กดเพื่อไปดูรอบนี้ที่โซนบอท")
+                                .clicked()
+                            {
+                                chosen = Some(index);
+                            }
                         }
                     });
             },
         );
         self.put("runs", slot);
+        if let Some(index) = chosen {
+            self.open_run(&runs[index]);
+        }
+    }
+
+    /// Go and look at one run: the pipeline, replaying its most telling tick.
+    ///
+    /// The newest tick of the run that sent an order and has code to show,
+    /// failing that the newest with code, failing that the newest at all -
+    /// so pressing a run that traded shows the trade, and pressing one that
+    /// did not shows what it was doing instead. A run older than the trail
+    /// the board holds has no ticks here, and the board says so rather than
+    /// replaying something else.
+    fn open_run(&mut self, run: &history::Run) {
+        let inside: Vec<&bot::Row> = self
+            .bot
+            .rows
+            .iter()
+            .filter(|row| run.covers(&row.at))
+            .collect();
+        let pick = inside
+            .iter()
+            .rev()
+            .find(|row| row.order.is_some() && row.has_trace())
+            .or_else(|| inside.iter().rev().find(|row| row.has_trace()))
+            .or_else(|| inside.last())
+            .map(|row| row.at.clone());
+        self.run_note = match &pick {
+            Some(_) => None,
+            None => Some(format!(
+                "รอบ {} เก่ากว่า {} tick ที่บอร์ดถืออยู่",
+                history::Run::clock(&run.started_at),
+                self.bot.rows.len()
+            )),
+        };
+        if pick.is_some() {
+            self.scene_rect = view(1);
+            self.replay_at(pick);
+        }
     }
 
     /// A month of days, each square coloured by what the account did.
@@ -3944,9 +4001,22 @@ fn code_line(ui: &mut egui::Ui, line: Shown<'_>, flash: f32, size: f32, gutter: 
 }
 
 /// One run, as a line in the history card.
-fn run_row(ui: &mut egui::Ui, run: &history::Run) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), Sense::hover());
+fn run_row(ui: &mut egui::Ui, run: &history::Run, here: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), Sense::click());
     let painter = ui.painter();
+    if here {
+        // The run the cards are showing a tick of, so the list and the
+        // pipeline can be read against each other.
+        painter.rect_stroke(
+            rect.expand2(egui::vec2(2.0, 0.0)),
+            3,
+            egui::Stroke::new(1.0, theme::ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    } else if response.hovered() {
+        painter.rect_filled(rect, 3, theme::ACCENT.gamma_multiply(0.06));
+    }
     let when = match run.seconds() {
         Some(seconds) => format!(
             "{} · {}",
@@ -3955,7 +4025,27 @@ fn run_row(ui: &mut egui::Ui, run: &history::Run) {
         ),
         None => history::Run::clock(&run.started_at).to_string(),
     };
-    let what = format!("{} · {}", run.strategy, run.mode);
+    // A run the bot did not write down is labelled as worked out, and an
+    // unknown strategy is a question mark rather than a blank, which would
+    // read as a strategy with no name.
+    let strategy = if run.strategy.is_empty() {
+        "?"
+    } else {
+        run.strategy.as_str()
+    };
+    // No receipt in the trail means nothing says where the orders went - a
+    // run whose orders were all refused, usually - and an empty field
+    // between two dots reads as a typo rather than as "unknown".
+    let mode = if run.mode.is_empty() {
+        "ไม่มีใบยืนยัน"
+    } else {
+        run.mode.as_str()
+    };
+    let what = if run.inferred {
+        format!("{strategy} · {mode} · เดาจาก audit")
+    } else {
+        format!("{strategy} · {mode}")
+    };
     // A run that was killed has no counts at all, and saying "0 ticks"
     // would be a measurement of something that was never measured.
     let result = if !run.finished {
@@ -3996,6 +4086,7 @@ fn run_row(ui: &mut egui::Ui, run: &history::Run) {
         font,
         colour,
     );
+    response
 }
 
 /// `61 วิ`, `4 นาที`, `2 ชม. 13 นาที`.
@@ -6146,5 +6237,90 @@ mod tests {
         let newest = board.bot.rows[2].at.clone();
         board.replay_at(Some(newest));
         assert_eq!(board.replay, None);
+    }
+
+    // ---------------------------------------------------- a run, opened
+
+    fn the_order_run() -> history::Run {
+        history::Run {
+            started_at: "2026-11-13T16:47:00+00:00".into(),
+            ended_at: "2026-11-13T16:48:00+00:00".into(),
+            strategy: "ping_pong".into(),
+            finished: true,
+            ticks: 3,
+            orders: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pressing_a_run_that_traded_replays_its_trade() {
+        let mut board = three_ticks();
+        board.open_run(&the_order_run());
+        assert_eq!(board.looking_at(), Some(1), "the pipeline zone");
+        assert_eq!(board.shown().unwrap().0, 1, "the order tick");
+        assert!(board.run_note.is_none());
+    }
+
+    #[test]
+    fn a_run_older_than_the_trail_says_so_instead_of_replaying_another() {
+        let mut board = three_ticks();
+        let before = board.scene_rect;
+        board.open_run(&history::Run {
+            started_at: "2026-11-04T10:00:00+00:00".into(),
+            ended_at: "2026-11-04T10:05:00+00:00".into(),
+            ..the_order_run()
+        });
+        assert!(!board.replaying());
+        assert_eq!(board.scene_rect, before, "stayed where it was");
+        assert!(board.run_note.as_deref().unwrap_or("").contains("เก่ากว่า"));
+    }
+
+    #[test]
+    fn a_run_worked_out_from_the_trail_is_labelled_as_one() {
+        let mut board = Board::default();
+        board.past.runs = vec![history::Run {
+            inferred: true,
+            strategy: String::new(),
+            mode: "live".into(),
+            ..a_run()
+        }];
+        let painted = painted_text(&mut board).join("\n");
+        assert!(painted.contains("? · live · เดาจาก audit"), "{painted}");
+    }
+
+    #[test]
+    fn a_run_with_no_receipt_says_so_rather_than_leaving_a_gap() {
+        let mut board = Board::default();
+        board.past.runs = vec![history::Run {
+            inferred: true,
+            mode: String::new(),
+            ..a_run()
+        }];
+        let painted = painted_text(&mut board).join(
+            "
+",
+        );
+        assert!(painted.contains("ไม่มีใบยืนยัน · เดาจาก audit"), "{painted}");
+        assert!(!painted.contains("·  ·"), "{painted}");
+    }
+
+    #[test]
+    fn a_run_covers_its_own_ticks_and_nobody_else_s() {
+        let run = the_order_run();
+        assert!(run.covers("2026-11-13T16:47:11+00:00"));
+        assert!(
+            run.covers("2026-11-13T23:47:30+07:00"),
+            "any spelling of the moment"
+        );
+        assert!(!run.covers("2026-11-13T16:49:00+00:00"));
+        let open = history::Run {
+            ended_at: String::new(),
+            ..run
+        };
+        assert!(
+            open.covers("2026-11-14T00:00:00+00:00"),
+            "still going covers what follows"
+        );
     }
 }
