@@ -1697,7 +1697,7 @@ impl Board {
                 ran: 0,
                 total: 0,
                 live: ran,
-                here: None,
+                glow: BTreeMap::new(),
             };
         };
         let hits = if ran {
@@ -1706,15 +1706,17 @@ impl Board {
             BTreeMap::new()
         };
         let (walked, total) = source.covered(&hits);
-        let steps = if ran {
+        let walk = if ran {
             self.walk_of(call, source)
         } else {
-            Vec::new()
+            Walk::default()
         };
         // A window around the line being walked, so the five lines on a
         // stage card keep up with the code instead of showing the same
         // five for ever.
-        let here = steps.get(self.head(now, steps.len())).copied();
+        let at = self.head(now, walk.steps.len());
+        let here = walk.steps.get(at).copied();
+        let glow = glow_of(&walk.steps, at);
         let lines = match (ran, here) {
             (true, Some(line)) => source.around(line, max, &hits),
             (true, None) => source.ran(&hits, max),
@@ -1729,16 +1731,38 @@ impl Board {
             ran: walked,
             total,
             live: ran,
-            here,
+            glow,
         }
     }
 
-    /// The steps this tick took inside one function, in order.
-    fn walk_of(&self, call: &bot::Call, source: &code::Source) -> Vec<usize> {
+    /// The steps this tick took inside one function.
+    ///
+    /// In the order the interpreter took them when the bot recorded that
+    /// order. When it did not - a trail written before it could - the lines
+    /// that ran are walked top to bottom instead, and the walk says so: the
+    /// head still shows which code ran, and the label stops it being read
+    /// as the order it ran in.
+    fn walk_of(&self, call: &bot::Call, source: &code::Source) -> Walk {
         let Some(trace) = self.trace() else {
-            return Vec::new();
+            return Walk::default();
         };
-        source.inside(&trace.steps_in(&call.file))
+        let ordered = source.inside(&trace.steps_in(&call.file));
+        if !ordered.is_empty() {
+            return Walk {
+                steps: ordered,
+                ordered: true,
+            };
+        }
+        let (first, last) = (source.first, source.last());
+        Walk {
+            steps: trace
+                .hits(&call.file)
+                .keys()
+                .copied()
+                .filter(|number| *number >= first && *number <= last)
+                .collect(),
+            ordered: false,
+        }
     }
 
     /// Which step of a walk is lit right now.
@@ -1761,7 +1785,7 @@ impl Board {
         self.paused_at.is_none()
             && self
                 .trace()
-                .map(|trace| !trace.path.is_empty())
+                .map(|trace| !trace.path.is_empty() || !trace.lines.is_empty())
                 .unwrap_or(false)
     }
 
@@ -1953,7 +1977,7 @@ impl Board {
                     number: *number,
                     text,
                     hits: *hits,
-                    here: strip.here == Some(*number),
+                    glow: strip.glow.get(number).copied().unwrap_or(0.0),
                 },
                 flash,
                 9.0,
@@ -2011,19 +2035,28 @@ impl Board {
             .map(|stage| stage.label)
             .unwrap_or("");
         let title = format!("โค้ดที่เพิ่งเดิน · {}. {}", self.code_stage + 1, label);
-        let steps = match (&call, &source, ran) {
+        let walk = match (&call, &source, ran) {
             (Some(call), Some(source), true) => self.walk_of(call, source),
-            _ => Vec::new(),
+            _ => Walk::default(),
         };
-        let walking = steps.get(self.head(now, steps.len())).copied();
+        let steps = walk.steps.clone();
+        let at = self.head(now, steps.len());
+        let walking = steps.get(at).copied();
+        let glow = glow_of(&steps, at);
         let paused = self.paused_at.is_some();
         let mut toggle = false;
         let (state, status) = match (&source, ran) {
             (Some(source), true) => {
                 let (walked, total) = source.covered(&hits);
-                let where_at = match (walking, steps.len()) {
-                    (Some(line), count) if count > 0 => {
-                        format!("บรรทัด {line} · {}/{count} ก้าว", self.head(now, count) + 1)
+                let where_at = match (walking, steps.len(), walk.ordered) {
+                    (Some(line), count, true) if count > 0 => {
+                        format!("บรรทัด {line} · {}/{count} ก้าว", at + 1)
+                    }
+                    // Not the order it ran in, and the chip says so: a
+                    // reader who took this for the real path would learn a
+                    // control flow the code does not have.
+                    (Some(line), count, false) if count > 0 => {
+                        format!("บรรทัด {line} · บนลงล่าง {}/{count}", at + 1)
                     }
                     _ => format!("เดิน {walked}/{total} บรรทัด"),
                 };
@@ -2146,6 +2179,13 @@ impl Board {
                             .color(theme::WARN)
                             .italics(),
                     );
+                } else if !walk.ordered && !walk.steps.is_empty() {
+                    ui.label(
+                        egui::RichText::new(UNORDERED)
+                            .size(9.5)
+                            .color(theme::WARN)
+                            .italics(),
+                    );
                 }
                 ui.label(
                     egui::RichText::new(format!(
@@ -2172,7 +2212,7 @@ impl Board {
                                     number,
                                     text,
                                     hits: count,
-                                    here: on_it,
+                                    glow: glow.get(&number).copied().unwrap_or(0.0),
                                 },
                                 flash,
                                 10.0,
@@ -3310,12 +3350,55 @@ struct Strip {
     /// True when these are lines the bot was seen running, false when they
     /// are the top of the function it would run.
     live: bool,
-    /// The line the replay is on, when there is a path to walk.
-    here: Option<usize>,
+    /// How brightly each visible line is lit by the replay: 1.0 under the
+    /// head, less for the few lines behind it, absent for the rest.
+    glow: BTreeMap<usize, f32>,
 }
 
 /// How long a line stays lit after the tick that ran it, in seconds.
 const FLASH: f64 = 0.9;
+
+/// How brightly the head lights the line it is on, and the lines it has
+/// just left. Four steps of tail is enough to show direction and short
+/// enough not to read as a second highlight.
+const TRAIL: [f32; 4] = [1.0, 0.55, 0.32, 0.15];
+
+/// Said over a walk whose order is not the order the code ran in.
+const UNORDERED: &str = "เรียงบนลงล่างตามบรรทัดที่เดินจริง · รอบนี้บอทยังไม่ได้จดลำดับ \
+     รันบอทใหม่แล้วจะเดินตามลำดับจริง";
+
+/// The steps a head walks through one function, and whether that order is
+/// the order the interpreter took.
+#[derive(Debug, Clone, Default)]
+struct Walk {
+    steps: Vec<usize>,
+    ordered: bool,
+}
+
+/// How brightly each line is lit when the head is on step `head`.
+///
+/// A line that appears twice in the tail - a tight loop - keeps the
+/// brighter of the two. The tail never wraps round to the end of the walk:
+/// the first step of a replay has nothing behind it, and drawing the last
+/// lines of the previous pass there would light code that has not run yet
+/// in this one.
+fn glow_of(steps: &[usize], head: usize) -> BTreeMap<usize, f32> {
+    let mut out = BTreeMap::new();
+    if steps.is_empty() {
+        return out;
+    }
+    for (back, weight) in TRAIL.iter().enumerate() {
+        if back > head {
+            break;
+        }
+        let line = steps[head - back];
+        let entry = out.entry(line).or_insert(0.0_f32);
+        if *weight > *entry {
+            *entry = *weight;
+        }
+    }
+    out
+}
 
 /// How fast the replay walks, in lines per second.
 ///
@@ -3380,14 +3463,16 @@ fn leaf(path: &str) -> &str {
 /// because the branch *not* taken is half of what a reader is looking for.
 /// A count on the right means a loop went round that many times, which is
 /// the one thing a listing of code can never show by itself.
-/// One line of source as a card wants it drawn.
+///
+/// (The struct below is what one call draws; `code_line` itself follows.)
 struct Shown<'a> {
     number: usize,
     text: &'a str,
     /// How many times the last tick ran it.
     hits: u64,
-    /// Is the replay on this line right now?
-    here: bool,
+    /// 1.0 for the line under the replay head, less for the few just behind
+    /// it, 0.0 for every other line.
+    glow: f32,
 }
 
 fn code_line(ui: &mut egui::Ui, line: Shown<'_>, flash: f32, size: f32, gutter: f32) -> Rect {
@@ -3395,17 +3480,31 @@ fn code_line(ui: &mut egui::Ui, line: Shown<'_>, flash: f32, size: f32, gutter: 
         number,
         text,
         hits,
-        here,
+        glow,
     } = line;
+    let here = glow >= 1.0;
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), size + 3.0), Sense::hover());
     let painter = ui.painter();
     if hits > 0 {
         painter.rect_filled(rect, 2, theme::OK.gamma_multiply(0.10 + 0.20 * flash));
     }
+    if glow > 0.0 && !here {
+        // The trail: the lines the head has just left, fading. One lit line
+        // jumping about reads as flicker; a lit line pulling a short tail
+        // reads as something moving down the page, which is what it is.
+        painter.rect_filled(rect, 0, theme::ACCENT.gamma_multiply(0.30 * glow));
+    }
     if here {
-        // The line the interpreter is on, at this moment of the replay.
-        painter.rect_filled(rect, 2, theme::ACCENT.gamma_multiply(0.22));
+        // The line the interpreter is on, drawn like a selection in an
+        // editor - a solid bar the width of the card - because that is the
+        // shape every reader already knows means "this one".
+        painter.rect_filled(rect, 0, theme::ACCENT.gamma_multiply(0.62));
+        painter.rect_filled(
+            Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+            0,
+            theme::ACCENT,
+        );
         // Drawn rather than typed: none of the arrow characters a person
         // would reach for exist in the fonts this board carries, and a
         // missing glyph is an empty box in the one place a reader is
@@ -3419,7 +3518,7 @@ fn code_line(ui: &mut egui::Ui, line: Shown<'_>, flash: f32, size: f32, gutter: 
                 egui::pos2(left + head * 1.3, middle),
                 egui::pos2(left, middle + head),
             ],
-            theme::ACCENT,
+            theme::TEXT,
             egui::Stroke::NONE,
         ));
     }
@@ -3428,15 +3527,18 @@ fn code_line(ui: &mut egui::Ui, line: Shown<'_>, flash: f32, size: f32, gutter: 
         egui::Align2::RIGHT_CENTER,
         number,
         egui::FontId::monospace(size - 1.5),
-        theme::FAINT,
+        if here { theme::TEXT } else { theme::FAINT },
     );
     painter.text(
         egui::pos2(rect.min.x + gutter, rect.center().y),
         egui::Align2::LEFT_CENTER,
         text,
         egui::FontId::monospace(size),
+        // On the bar the text has to be the brightest thing on the card,
+        // not the bar's own colour, or the line being pointed at is the one
+        // line nobody can read.
         match (here, hits > 0) {
-            (true, _) => theme::ACCENT,
+            (true, _) => theme::TEXT,
             (false, true) => theme::TEXT,
             (false, false) => theme::DIM,
         },
@@ -5207,7 +5309,9 @@ mod tests {
             func: "get_signal".to_string(),
             line: 77,
         };
-        assert_eq!(board.walk_of(&call, &source), vec![78, 80, 80, 80]);
+        let walk = board.walk_of(&call, &source);
+        assert_eq!(walk.steps, vec![78, 80, 80, 80]);
+        assert!(walk.ordered, "ลำดับมาจาก path ที่บอทจดจริง");
     }
 
     #[test]
@@ -5219,22 +5323,51 @@ mod tests {
         assert!(!board.walking(), "หยุดแล้วไม่ต้องรีเพนต์ถี่");
     }
 
-    /// An audit trail written before the bot recorded order still colours
-    /// in; it simply has no path to walk, and must not pretend otherwise.
+    /// An audit trail written before the bot recorded order still walks -
+    /// top to bottom through the lines that ran - and says plainly that the
+    /// order is not the real one. Before this it sat still, which a person
+    /// reported as "the highlight does not move".
     #[test]
-    fn a_trail_with_no_path_colours_in_without_walking() {
+    fn a_trail_with_no_recorded_order_walks_top_to_bottom_and_says_so() {
         let mut board = watching();
         if let Some(trace) = board.bot.rows.last_mut().and_then(|row| row.trace.as_mut()) {
             trace.path.clear();
             trace.files.clear();
         }
-        assert!(!board.walking());
-        let painted = painted_text(&mut board).join("\n");
-        assert!(painted.contains("เดิน 2/4 บรรทัด"), "{painted}");
+        assert!(board.walking(), "ยังต้องเดิน ไม่ใช่นิ่ง");
+        board.mark_tick(1.0);
+        let first = painted_at(&mut board, 1.0).join("\n");
+        assert!(first.contains("บรรทัด 78 · บนลงล่าง 1/2"), "{first}");
+        let second = painted_at(&mut board, 1.0 + 1.0 / WALK_RATE).join("\n");
+        assert!(second.contains("บรรทัด 80 · บนลงล่าง 2/2"), "{second}");
         assert!(
-            !painted.contains("ก้าว"),
-            "ไม่มี path ก็ไม่ควรพูดถึงก้าว · {painted}"
+            first.contains("ยังไม่ได้จดลำดับ"),
+            "ต้องบอกว่าไม่ใช่ลำดับจริง · {first}"
         );
+        assert!(!first.contains("ก้าว"), "ไม่ใช่ก้าวจริง ห้ามเรียกว่าก้าว · {first}");
+    }
+
+    #[test]
+    fn the_line_under_the_head_is_lit_fully_and_the_lines_behind_it_fade() {
+        let glow = glow_of(&[10, 11, 12, 13, 14], 4);
+        assert_eq!(glow[&14], 1.0);
+        assert!(glow[&13] < 1.0 && glow[&13] > glow[&12], "จางลงตามระยะ");
+        assert!(glow[&12] > glow[&11]);
+        assert!(!glow.contains_key(&10), "หางยาวแค่สี่ก้าว");
+    }
+
+    #[test]
+    fn the_trail_does_not_wrap_round_to_light_code_that_has_not_run_yet() {
+        let glow = glow_of(&[10, 11, 12, 13], 0);
+        assert_eq!(glow.len(), 1, "ก้าวแรกไม่มีอะไรอยู่ข้างหลัง");
+        assert_eq!(glow[&10], 1.0);
+    }
+
+    #[test]
+    fn a_tight_loop_keeps_the_brighter_of_the_two_lights() {
+        // 20, 21, 20: line 20 is both under the head and two steps back.
+        let glow = glow_of(&[20, 21, 20], 2);
+        assert_eq!(glow[&20], 1.0);
     }
 
     // --------------------------------------------------------- the history
