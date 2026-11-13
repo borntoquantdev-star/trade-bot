@@ -2048,6 +2048,11 @@ impl Board {
         // honest, where a flash of "not reached" would not be.
         if let Some((_, row)) = self.shown() {
             if row.trace.is_none() && row.traced && self.traces.get(&row.at).is_none() {
+                // Asked and refused is not the same as still asking: a
+                // trace rolled out of the file is never coming.
+                if self.traces.missing(&row.at) {
+                    return Quiet::TraceGone;
+                }
                 return Quiet::Loading;
             }
         }
@@ -3966,6 +3971,9 @@ enum Quiet {
     NotReached,
     /// The bot recorded the tick and its trace is being fetched.
     Loading,
+    /// The bot recorded the tick, but its trace has since been rolled out
+    /// of the trace file.
+    TraceGone,
 }
 
 impl Quiet {
@@ -3976,6 +3984,7 @@ impl Quiet {
             Quiet::OldBot | Quiet::OldBotGuessedFile => "บอทยังไม่ได้จด",
             Quiet::NotReached => "รอบนี้ไม่ได้มาถึง",
             Quiet::Loading => "กำลังเปิด trace",
+            Quiet::TraceGone => "trace ถูกหมุนทิ้งแล้ว",
         }
     }
 
@@ -3988,6 +3997,9 @@ impl Quiet {
                 "บอทที่รันอยู่ยังไม่ได้บอกว่าใช้ไฟล์ไหน · ไฟล์นี้เดามาจากคอนฟิก อาจไม่ใช่กลยุทธ์ตัวจริง — ปิดแล้วรันบอทใหม่"
             }
             Quiet::Loading => "กำลังเปิดร่องรอยของ tick นี้",
+            Quiet::TraceGone => {
+                "ร่องรอยของ tick นี้เก่าเกินกว่าที่ไฟล์ trace เก็บไว้ (หมุนไฟล์ทิ้งเมื่อเกิน 64 MB) · เลือก tick ที่ใหม่กว่า"
+            }
             Quiet::NotReached => {
                 "tick ล่าสุดหยุดก่อนถึงขั้นนี้ · ดูการ์ดขั้นก่อนหน้าว่าหยุดที่บรรทัดไหน \
                  หรือเลือก tick ที่ส่งออเดอร์มาเล่นซ้ำ"
@@ -6330,6 +6342,17 @@ mod tests {
 ",
         );
         assert!(painted.contains("บรรทัด 78 · 1/4 ก้าว"), "{painted}");
+    }
+
+    #[test]
+    fn a_trace_the_server_no_longer_has_is_not_waited_for_for_ever() {
+        let mut board = watching();
+        let row = board.bot.rows.last_mut().unwrap();
+        row.trace = None;
+        row.traced = true;
+        let at = row.at.clone();
+        board.traces.forget_for_test(&at);
+        assert_eq!(board.why_quiet(), Quiet::TraceGone);
     }
 
     #[test]

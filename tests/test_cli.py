@@ -81,6 +81,8 @@ def paths(tmp_path):
         str(tmp_path / "audit.jsonl"),
         "--runs-file",
         str(tmp_path / "runs.jsonl"),
+        "--trace-file",
+        str(tmp_path / "trace.jsonl"),
     ]
 
 

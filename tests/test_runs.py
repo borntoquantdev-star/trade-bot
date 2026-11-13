@@ -161,6 +161,8 @@ def test_a_real_run_brackets_itself(tmp_path):
             str(tmp_path / "audit.jsonl"),
             "--runs-file",
             str(path),
+            "--trace-file",
+            str(tmp_path / "trace.jsonl"),
         ]
     )
     assert code == 0
@@ -191,6 +193,8 @@ def run_with(tmp_path, *extra):
             str(tmp_path / "audit.jsonl"),
             "--runs-file",
             str(tmp_path / "runs.jsonl"),
+            "--trace-file",
+            str(tmp_path / "trace.jsonl"),
             *extra,
         ]
     )

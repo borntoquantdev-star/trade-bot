@@ -315,3 +315,60 @@ def test_the_closing_row_carries_its_own_trace_not_the_last_tick_s(tmp_path):
     funcs = {call["func"] for call in last["trace"]["calls"]}
     assert "flatten" in funcs
     assert "get_signal" not in funcs, "not the trace of the tick before"
+
+
+# --- the trace file -------------------------------------------------------------
+
+
+def engine_with_file(tmp_path) -> Engine:
+    bot = engine(tmp_path, trace=True)
+    bot.trace_path = tmp_path / "trace.jsonl"
+    return bot
+
+
+def trace_lines(tmp_path) -> list[dict]:
+    text = (tmp_path / "trace.jsonl").read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+@taken
+def test_with_a_trace_file_the_audit_row_stays_short_and_points_at_it(tmp_path):
+    """The audit trail is read by people, line by line; a trace is fifteen
+    times the size of the rest of the row and belongs in its own file."""
+    bot = engine_with_file(tmp_path)
+    bot.start()
+    bot.tick()
+    row = rows(tmp_path)[-1]
+    assert "trace" not in row, "the heavy part is not in the readable file"
+    assert row["traced"] is True
+    traces = trace_lines(tmp_path)
+    assert traces[-1]["at"] == row["at"], "found by the row's own timestamp"
+    assert traces[-1]["trace"]["path"], "and it is the whole trace"
+    assert len(json.dumps(row)) < 600, "short enough to read"
+
+
+@taken
+def test_a_trace_file_that_grew_too_big_is_rolled_over(tmp_path, monkeypatch):
+    from tradebot.core import engine as engine_module
+
+    monkeypatch.setattr(engine_module, "TRACE_ROTATE_BYTES", 10)
+    bot = engine_with_file(tmp_path)
+    bot.start()
+    bot.tick()
+    bot.tick()
+    assert (tmp_path / "trace.jsonl.1").exists(), "the full one was moved aside"
+    assert len(trace_lines(tmp_path)) == 1, "and a fresh one started"
+
+
+@taken
+def test_a_trace_that_could_not_be_written_leaves_no_mark_on_the_row(tmp_path):
+    """A mark pointing at a trace that is not there would have the board
+    waiting for something that will never arrive."""
+    bot = engine(tmp_path, trace=True)
+    (tmp_path / "a-directory").mkdir()
+    bot.trace_path = tmp_path / "a-directory"
+    bot.start()
+    bot.tick()
+    row = rows(tmp_path)[-1]
+    assert "traced" not in row
+    assert "trace" not in row

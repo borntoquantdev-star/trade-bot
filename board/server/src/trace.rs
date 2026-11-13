@@ -25,20 +25,65 @@ pub struct Ask {
 }
 
 pub async fn trace(State(config): State<Config>, Query(ask): Query<Ask>) -> Json<Value> {
-    let path = config.logs.join("audit.jsonl");
-    let Ok(text) = tokio::fs::read_to_string(&path).await else {
-        return Json(json!({
-            "present": false,
-            "reason": format!("ยังไม่มี {}", path.display()),
-        }));
+    // Where a trace can be, newest home first: the trace file the bot writes
+    // now, the one it rolled over, and - for rows written before the file
+    // existed - inside the audit row itself.
+    let places = [
+        config.logs.join("trace.jsonl"),
+        config.logs.join("trace.jsonl.1"),
+        config.logs.join("audit.jsonl"),
+    ];
+    for path in &places {
+        if let Some(trace) = search(path, &ask.at).await {
+            return Json(json!({"present": true, "at": ask.at, "trace": trace}));
+        }
+    }
+    Json(json!({
+        "present": false,
+        "reason": format!("ไม่พบ trace ของ tick {} · อาจถูกหมุนไฟล์ทิ้งไปแล้ว", ask.at),
+    }))
+}
+
+/// How much of the end of a file is read before the whole of it. Nearly
+/// every question is about a tick from the last few seconds, and a trace
+/// file can be tens of megabytes.
+const TAIL_BYTES: u64 = 1024 * 1024;
+
+/// Look for one tick's trace in one file: its tail first, the rest only if
+/// the tail did not have it.
+pub async fn search(path: &std::path::Path, at: &str) -> Option<Value> {
+    let (tail, whole) = read_tail(path, TAIL_BYTES).await?;
+    if let Some(found) = find(&tail, at) {
+        return Some(found);
+    }
+    if whole {
+        return None;
+    }
+    let text = tokio::fs::read_to_string(path).await.ok()?;
+    find(&text, at)
+}
+
+/// The last `bytes` of a file as text, starting at a line boundary, and
+/// whether that was the whole file.
+async fn read_tail(path: &std::path::Path, bytes: u64) -> Option<(String, bool)> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let length = file.metadata().await.ok()?.len();
+    let start = length.saturating_sub(bytes);
+    file.seek(std::io::SeekFrom::Start(start)).await.ok()?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).await.ok()?;
+    let text = String::from_utf8_lossy(&buffer).into_owned();
+    if start == 0 {
+        return Some((text, true));
+    }
+    // Landed in the middle of a line: drop the partial first line rather
+    // than hand a broken row to the parser.
+    let text = match text.find('\n') {
+        Some(newline) => text[newline + 1..].to_owned(),
+        None => String::new(),
     };
-    Json(match find(&text, &ask.at) {
-        Some(trace) => json!({"present": true, "at": ask.at, "trace": trace}),
-        None => json!({
-            "present": false,
-            "reason": format!("ไม่พบ trace ของ tick {}", ask.at),
-        }),
-    })
+    Some((text, false))
 }
 
 /// Take the trace off a row for the trip down the wire, leaving a mark that
@@ -140,5 +185,52 @@ mod tests {
     fn a_timestamp_that_only_appears_inside_another_field_is_not_a_match() {
         let tricky = r#"{"at": "2026-11-13T16:00:00+00:00", "note": "\"at\": \"2026-11-13T16:47:11+00:00\"", "trace": {"steps": 7}}"#;
         assert!(find(tricky, "2026-11-13T16:47:11+00:00").is_none());
+    }
+
+    // ------------------------------------------------- the trace file
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("board-trace-{name}-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[tokio::test]
+    async fn a_recent_trace_is_found_in_the_tail_of_a_long_file() {
+        let dir = scratch("tail");
+        let path = dir.join("trace.jsonl");
+        // Two megabytes of older ticks, then the one being asked for.
+        let filler = format!(
+            "{{\"at\": \"old\", \"trace\": {{\"pad\": \"{}\"}}}}\n",
+            "x".repeat(1000)
+        );
+        let mut text = filler.repeat(2100);
+        text.push_str("{\"at\": \"2026-11-13T19:20:03+00:00\", \"trace\": {\"steps\": 7}}\n");
+        std::fs::write(&path, text).unwrap();
+        let found = search(&path, "2026-11-13T19:20:03+00:00").await.unwrap();
+        assert_eq!(found["steps"], 7);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_old_trace_beyond_the_tail_is_still_found() {
+        let dir = scratch("head");
+        let path = dir.join("trace.jsonl");
+        let mut text = String::from("{\"at\": \"first\", \"trace\": {\"steps\": 1}}\n");
+        let filler = format!(
+            "{{\"at\": \"later\", \"trace\": {{\"pad\": \"{}\"}}}}\n",
+            "y".repeat(1000)
+        );
+        text.push_str(&filler.repeat(2100));
+        std::fs::write(&path, text).unwrap();
+        let found = search(&path, "first").await.unwrap();
+        assert_eq!(found["steps"], 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_not_there_has_nothing_in_it() {
+        let missing = std::env::temp_dir().join("board-trace-no-such-file.jsonl");
+        assert!(search(&missing, "anything").await.is_none());
     }
 }

@@ -42,6 +42,11 @@ from .config import BotConfig
 Clock = Callable[[], datetime]
 Sleeper = Callable[[float], None]
 
+#: When the trace file is rolled over to ``trace.jsonl.1``.  A trace is a few
+#: kilobytes a tick, so a bot left running all day would otherwise grow one
+#: file without limit; the board only ever looks at recent ticks anyway.
+TRACE_ROTATE_BYTES = 64 * 1024 * 1024
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -145,6 +150,7 @@ class Engine:
         history: int = 200,
         max_consecutive_errors: int = 5,
         trace: bool = False,
+        trace_path: Path | None = None,
     ) -> None:
         self.config = config
         self.broker = broker
@@ -160,10 +166,14 @@ class Engine:
         self.max_consecutive_errors = max_consecutive_errors
         self._consecutive_errors = 0
         self._instrument = config.instrument
-        # Recording which lines ran costs nothing when nobody is reading the
-        # audit trail, so it follows the trail rather than having a switch of
-        # its own to forget about.
+        # Which lines each tick ran, for the board.  Off unless asked for;
+        # the CLI asks for it by default.  With a trace file each trace goes
+        # there and the audit row only says it has one, which keeps the audit
+        # trail a file a person can read line by line - a trace is fifteen
+        # times the size of the rest of a row.  Without one the trace rides
+        # inside the row, as it did before the file existed.
         self.trace_enabled = trace
+        self.trace_path = Path(trace_path) if trace_path else None
         self._trace = Trace(enabled=False)
         # What this run has done so far, for the run log.  Counted here
         # rather than derived from the audit trail later, because the trail
@@ -575,7 +585,12 @@ class Engine:
             row["error"] = result.error
         trace = self._trace.as_json()
         if trace is not None:
-            row["trace"] = trace
+            if self.trace_path is None:
+                row["trace"] = trace
+            elif self._write_trace(row["at"], trace):
+                # Written before the row, so anything that sees "traced" in
+                # the trail can already find the trace it points at.
+                row["traced"] = True
         try:
             self.audit_path.parent.mkdir(parents=True, exist_ok=True)
             with self.audit_path.open("a", encoding="utf-8") as handle:
@@ -584,5 +599,34 @@ class Engine:
             self.log.warning("could not write the audit trail: %s", exc)
         return result
 
+    def _write_trace(self, at: str, trace: dict[str, Any]) -> bool:
+        """Append one tick's trace to the trace file, rolling it over when big.
 
-__all__ = ["Clock", "Engine", "EngineState", "Sleeper", "TickResult", "utc_now"]
+        Returns False, and says so in the log, if it could not be written:
+        the audit row then carries no mark, rather than a mark pointing at a
+        trace that is not there.
+        """
+        path = self.trace_path
+        if path is None:
+            return False
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists() and path.stat().st_size > TRACE_ROTATE_BYTES:
+                path.replace(path.with_name(path.name + ".1"))
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"at": at, "trace": trace}, ensure_ascii=False) + "\n")
+        except OSError as exc:  # never let the picture break the trading
+            self.log.warning("could not write the trace file: %s", exc)
+            return False
+        return True
+
+
+__all__ = [
+    "TRACE_ROTATE_BYTES",
+    "Clock",
+    "Engine",
+    "EngineState",
+    "Sleeper",
+    "TickResult",
+    "utc_now",
+]

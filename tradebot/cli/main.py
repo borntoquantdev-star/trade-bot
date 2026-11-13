@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--iterations", type=int, default=None, help="stop after N loops (default: run forever)"
     )
     parser.add_argument(
+        "--trace-file",
+        default="logs/trace.jsonl",
+        help="where each tick's trace goes, so the audit trail stays readable",
+    )
+    parser.add_argument(
         "--close-at-end",
         action="store_true",
         help="close the position when the run stops (after --iterations, or Ctrl+C)",
@@ -278,6 +283,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         state_path=Path(args.state_file) if args.state_file else None,
         audit_path=Path(args.audit_file) if args.audit_file else None,
         trace=args.trace,
+        trace_path=Path(args.trace_file) if args.trace_file else None,
     )
 
     if args.resume:

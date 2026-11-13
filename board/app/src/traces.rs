@@ -84,9 +84,21 @@ impl Traces {
         }
     }
 
+    /// Did the server say it has no trace for this tick? Usually one that
+    /// was rolled out of the trace file.
+    pub fn missing(&self, at: &str) -> bool {
+        matches!(self.held.get(at), Some(State::Missing(_)))
+    }
+
     /// Is the trace of this tick on its way?
     pub fn waiting(&self, at: &str) -> bool {
         matches!(self.held.get(at), Some(State::Waiting(_)))
+    }
+
+    /// Record that the server had none for this tick. Tests only.
+    #[cfg(test)]
+    pub fn forget_for_test(&mut self, at: &str) {
+        self.keep(at.to_owned(), State::Missing(f64::INFINITY));
     }
 
     /// Hand one over without a network. Tests only.
