@@ -42,3 +42,7 @@ Thumbs.db
 # their cards into, which is theirs and not the repository's.
 target/
 board-layout.json
+# The portable board a teacher hands out: rebuilt by board/pack.ps1.
+board/pack/
+# A student's unzipped copy of that pack, inside their bot folder.
+board-pack/
