@@ -497,7 +497,9 @@ pub fn stages_of(rows: &[Row], state: Option<&BotState>) -> Vec<Stage> {
         out[1].metric = signal.side.clone();
         out[1].detail = format!(
             "{} @ {} · stop {}",
-            signal.side, signal.ref_price, signal.stop_price
+            signal.side,
+            tidy(&signal.ref_price, 2),
+            tidy(&signal.stop_price, 2)
         );
     } else if counts.ticks > 0 {
         out[1].state = theme::State::Wip;
@@ -521,7 +523,9 @@ pub fn stages_of(rows: &[Row], state: Option<&BotState>) -> Vec<Stage> {
         out[2].metric = order.qty.clone();
         out[2].detail = format!(
             "อนุมัติ {} @ {} · เสี่ยง {}",
-            order.qty, order.limit_price, order.risk_amount
+            order.qty,
+            tidy(&order.limit_price, 2),
+            tidy(&order.risk_amount, 2)
         );
     } else if latest.signal.is_some() {
         out[2].state = theme::State::Wip;
@@ -643,7 +647,8 @@ pub fn log_of(rows: &[Row], limit: usize) -> Vec<Entry> {
                 title: format!("{} {}", order.side, order.qty),
                 text: format!(
                     "@ {} · เสี่ยง {} · {stamp}",
-                    order.limit_price, order.risk_amount
+                    tidy(&order.limit_price, 2),
+                    tidy(&order.risk_amount, 2)
                 ),
             });
         } else if let Some(reject) = &row.reject {
@@ -1241,6 +1246,27 @@ pub fn money(value: f64) -> String {
     format!("{value:.2}")
 }
 
+/// A decimal string cut to `places` decimals for a card, or left exactly as
+/// written when it already fits.
+///
+/// The bot writes risk and prices at full Decimal precision - `49.680962364
+/// 7132074300` - which is right for the file and unreadable on a card. Only
+/// the drawing is rounded: the string in the row is never touched, and a
+/// price the exchange quoted as `68621.4` is not padded to `68621.40`,
+/// because the extra zero would claim a precision the market did not give.
+pub fn tidy(text: &str, places: usize) -> String {
+    let Some((_, fraction)) = text.split_once('.') else {
+        return text.to_owned();
+    };
+    if fraction.len() <= places {
+        return text.to_owned();
+    }
+    match text.parse::<f64>() {
+        Ok(value) if value.is_finite() => format!("{value:.places$}"),
+        _ => text.to_owned(),
+    }
+}
+
 /// Money with its sign shown, because "-9.00" and "9.00" are the whole story.
 pub fn signed(value: f64) -> String {
     format!("{value:+.2}")
@@ -1300,6 +1326,20 @@ mod tests {
         assert_eq!(opt_pct(None), UNMEASURED);
         assert_eq!(opt(Some(0.0), 2), "0.00", "ศูนย์ที่วัดได้ ต้องพิมพ์เป็นศูนย์");
         assert_eq!(opt(Some(-1.3509), 2), "-1.35");
+    }
+
+    #[test]
+    fn a_long_decimal_is_cut_for_the_card_and_a_short_one_is_left_alone() {
+        assert_eq!(tidy("49.6809623647132074300", 2), "49.68");
+        assert_eq!(tidy("68278.674939292068", 2), "68278.67");
+        assert_eq!(
+            tidy("68621.4", 2),
+            "68621.4",
+            "no zero the market did not give"
+        );
+        assert_eq!(tidy("100", 2), "100");
+        assert_eq!(tidy("ไม่ใช่ตัวเลข.12345", 2), "ไม่ใช่ตัวเลข.12345");
+        assert_eq!(tidy("", 2), "");
     }
 
     #[test]
