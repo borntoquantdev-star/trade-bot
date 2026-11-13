@@ -27,6 +27,7 @@ mod code;
 mod history;
 mod kline;
 mod market;
+mod trace;
 
 #[derive(Clone)]
 pub struct Config {
@@ -111,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/stages", get(code::stages))
         .route("/api/runs", get(history::runs))
         .route("/api/days", get(history::days))
+        .route("/api/trace", get(trace::trace))
         .route("/api/candles", get(candles::candles))
         .route("/api/candles/available", get(candles::available))
         .route("/api/kline", get(kline::kline))
@@ -210,7 +212,13 @@ async fn audit(State(config): State<Config>) -> Result<Json<serde_json::Value>, 
             continue;
         }
         match serde_json::from_str(line) {
-            Ok(value) => rows.push(value),
+            Ok(mut value) => {
+                // Each trace is fifteen times the rest of its row, and the
+                // board shows one tick at a time: it asks /api/trace for
+                // the one it is showing. See trace.rs.
+                trace::slim(&mut value);
+                rows.push(value)
+            }
             // One broken line must not make the whole trail unreadable.
             Err(_) => unreadable += 1,
         }

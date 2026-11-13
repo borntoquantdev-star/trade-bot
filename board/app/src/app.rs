@@ -16,6 +16,7 @@ use crate::feed::{Feed, Health};
 use crate::history::{self, Past};
 use crate::market::{parse, Env};
 use crate::theme;
+use crate::traces::Traces;
 use crate::wire;
 use crate::zoom::Zoom;
 
@@ -109,6 +110,8 @@ pub struct Board {
     exchange: Exchange,
     /// Every run the bot has made, and what each day came to.
     past: Past,
+    /// The traces of the ticks the cards have shown, fetched one at a time.
+    traces: Traces,
     /// What part of each chart is on screen. Kept here rather than in the
     /// cards, because it is what the person looking wants, not a property of
     /// the data.
@@ -256,6 +259,7 @@ impl Default for Board {
             slots,
             feed: Feed::new(Env::Testnet, INSTRUMENTS[0]),
             past: Past::default(),
+            traces: Traces::default(),
             history: History::default(),
             bot: Bot::default(),
             account_data: Account::default(),
@@ -470,6 +474,14 @@ impl eframe::App for Board {
         self.history.tick(now, &instrument, self.timeframe, 400);
         self.bot.poll(now);
         self.code.poll(now);
+        self.traces.poll(now);
+        // The trail arrives without traces; fetch the one being shown.
+        if let Some((_, row)) = self.shown() {
+            if row.trace.is_none() && row.traced {
+                let at = row.at.clone();
+                self.traces.want(&at, now);
+            }
+        }
         if self.replay_order_on_load && !self.bot.rows.is_empty() {
             self.replay_order_on_load = false;
             self.replay_at(self.last_order_tick());
@@ -1771,7 +1783,10 @@ impl Board {
     /// not have one. Every card that reads this must cope with that, because
     /// a student's first audit trail will often be one of those.
     fn trace(&self) -> Option<&bot::Trace> {
-        self.shown().and_then(|(_, row)| row.trace.as_ref())
+        let (_, row) = self.shown()?;
+        // On the row itself when it came that way (an older server, or a
+        // test); otherwise fetched on its own and kept.
+        row.trace.as_ref().or_else(|| self.traces.get(&row.at))
     }
 
     /// The row the five cards are showing, and where it is in the trail:
@@ -1833,7 +1848,7 @@ impl Board {
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.trace.is_some())
+            .filter(|(_, row)| row.has_trace())
             .map(|(index, _)| index)
             .collect();
         if traced.is_empty() {
@@ -1865,7 +1880,7 @@ impl Board {
     fn last_order_tick(&self) -> Option<String> {
         let orders = || self.bot.rows.iter().rev().filter(|row| row.order.is_some());
         orders()
-            .find(|row| row.trace.is_some())
+            .find(|row| row.has_trace())
             .or_else(|| orders().next())
             .map(|row| row.at.clone())
     }
@@ -2000,6 +2015,13 @@ impl Board {
     fn why_quiet(&self) -> Quiet {
         if self.bot.rows.is_empty() {
             return Quiet::NeverRan;
+        }
+        // The trace is on its way: a few milliseconds of "loading" is
+        // honest, where a flash of "not reached" would not be.
+        if let Some((_, row)) = self.shown() {
+            if row.trace.is_none() && row.traced && self.traces.get(&row.at).is_none() {
+                return Quiet::Loading;
+            }
         }
         // The bot recorded this tick; this stage's code simply was not part
         // of it. A tick with no signal never reaches the gate, and that is
@@ -3785,6 +3807,8 @@ enum Quiet {
     /// The bot recorded the tick, and the tick stopped before this stage:
     /// no signal means no gate, no approval means no order.
     NotReached,
+    /// The bot recorded the tick and its trace is being fetched.
+    Loading,
 }
 
 impl Quiet {
@@ -3794,6 +3818,7 @@ impl Quiet {
             Quiet::NeverRan => "ยังไม่ได้รัน",
             Quiet::OldBot | Quiet::OldBotGuessedFile => "บอทยังไม่ได้จด",
             Quiet::NotReached => "รอบนี้ไม่ได้มาถึง",
+            Quiet::Loading => "กำลังเปิด trace",
         }
     }
 
@@ -3805,6 +3830,7 @@ impl Quiet {
             Quiet::OldBotGuessedFile => {
                 "บอทที่รันอยู่ยังไม่ได้บอกว่าใช้ไฟล์ไหน · ไฟล์นี้เดามาจากคอนฟิก อาจไม่ใช่กลยุทธ์ตัวจริง — ปิดแล้วรันบอทใหม่"
             }
+            Quiet::Loading => "กำลังเปิดร่องรอยของ tick นี้",
             Quiet::NotReached => {
                 "tick ล่าสุดหยุดก่อนถึงขั้นนี้ · ดูการ์ดขั้นก่อนหน้าว่าหยุดที่บรรทัดไหน \
                  หรือเลือก tick ที่ส่งออเดอร์มาเล่นซ้ำ"
@@ -6092,6 +6118,26 @@ mod tests {
         board.replay_order_on_load = false;
         board.replay_at(board.last_order_tick());
         assert_eq!(board.shown().unwrap().0, 1, "the order tick");
+    }
+
+    /// The real server sends rows without their traces. The cards must
+    /// walk exactly the same once the trace has been fetched separately.
+    #[test]
+    fn a_slim_row_walks_once_its_trace_has_been_fetched() {
+        let mut board = watching();
+        let row = board.bot.rows.last_mut().unwrap();
+        let trace = row.trace.take().unwrap();
+        row.traced = true;
+        let at = row.at.clone();
+        assert!(board.trace().is_none(), "not here yet");
+        assert_eq!(board.why_quiet(), Quiet::Loading);
+        board.traces.hold(&at, trace);
+        assert!(board.trace().is_some());
+        let painted = painted_text(&mut board).join(
+            "
+",
+        );
+        assert!(painted.contains("บรรทัด 78 · 1/4 ก้าว"), "{painted}");
     }
 
     #[test]

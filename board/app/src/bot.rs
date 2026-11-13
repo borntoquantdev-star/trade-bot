@@ -89,6 +89,18 @@ pub struct Row {
     /// not to, which is why every reader here treats it as optional.
     #[serde(default)]
     pub trace: Option<Trace>,
+    /// The server took this row's trace off for the trip and left this mark
+    /// instead; the board asks for the trace when it shows the tick.
+    #[serde(default)]
+    pub traced: bool,
+}
+
+impl Row {
+    /// Did the bot record which lines this tick ran - whether or not that
+    /// record has arrived yet?
+    pub fn has_trace(&self) -> bool {
+        self.trace.is_some() || self.traced
+    }
 }
 
 /// The path one tick took through the bot's code, as the bot recorded it.
