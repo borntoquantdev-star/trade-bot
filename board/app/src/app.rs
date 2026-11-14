@@ -147,6 +147,12 @@ pub struct Board {
     /// `None` follows the newest. A replayed tick that sent one wins over
     /// both, so stepping the pipeline onto an order shows that order's trip.
     trip_pick: Option<String>,
+    /// The trip being watched for the moment it lands: its tick, whether it
+    /// was still moving last frame, and when the board saw it fill. The glow
+    /// is timed from *seeing* the fill, not from the fill's own stamp - the
+    /// board learns of a fill a few seconds late, and a glow timed from the
+    /// stamp had already faded by then (seen live on testnet, 14 Nov).
+    trip_watch: Option<(String, bool, Option<f64>)>,
     /// Why pressing a run did not open it, until the next press.
     run_note: Option<String>,
     /// When the walk was paused, if it is.
@@ -293,6 +299,7 @@ impl Default for Board {
             replay: None,
             replay_order_on_load: false,
             trip_pick: None,
+            trip_watch: None,
             run_note: None,
             seen_tick: String::new(),
             seen_at: 0.0,
@@ -2126,6 +2133,27 @@ impl Board {
             },
         );
         self.put("trip", slot);
+        // Where the eye should go: while the order is still moving, the trip
+        // and the stage that sent it pulse together; for a few seconds after
+        // it fills, they glow green and fade, so the moment it lands is seen
+        // even by someone who was looking at the code.
+        if let Some((trip, _, phase, ..)) = &current {
+            watch_landing(&mut self.trip_watch, trip, phase, now);
+            let landed = self.trip_watch.as_ref().and_then(|watch| watch.2);
+            if let Some((colour, strength)) = trip_glow(phase, landed, now) {
+                let painter = ui.painter();
+                for id in ["s4", "trip"] {
+                    painter.rect_stroke(
+                        self.slot(id).rect().expand(4.0),
+                        theme::card_radius(),
+                        egui::Stroke::new(2.0, colour.gamma_multiply(strength)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(60));
+            }
+        }
         if let Some(choice) = pick {
             // Stepping the trips leaves a replay of some other tick behind;
             // otherwise the replay would keep overriding the pick.
@@ -4734,6 +4762,52 @@ fn unix_now() -> f64 {
     crate::time::now_unix().unwrap_or(0.0)
 }
 
+/// How long a filled order keeps glowing after it lands, in seconds.
+const LANDED_GLOW: f64 = 4.0;
+
+/// A trip fresh enough that seeing it already filled still counts as
+/// seeing it land, in seconds since it was sent.
+const FRESH_TRIP: f64 = 15.0;
+
+/// Update what the board knows about the trip on screen landing.
+fn watch_landing(
+    watch: &mut Option<(String, bool, Option<f64>)>,
+    trip: &Trip,
+    phase: &Phase,
+    now: f64,
+) {
+    let live = phase.is_live();
+    let filled = *phase == Phase::Filled;
+    match watch {
+        Some((tick, was_live, landed)) if *tick == trip.tick_at => {
+            if *was_live && filled && landed.is_none() {
+                *landed = Some(now);
+            }
+            *was_live = live;
+        }
+        _ => {
+            // First sight of this trip. Already filled and only just sent:
+            // the fill beat the board here, and it is still news.
+            let fresh = trip.start().is_some_and(|start| now - start < FRESH_TRIP);
+            *watch = Some((trip.tick_at.clone(), live, (filled && fresh).then_some(now)));
+        }
+    }
+}
+
+/// The outline the send stage and the trip card wear: pulsing amber while
+/// the order is on its way, fading green for a few seconds after the board
+/// sees it fill. `None` once there is nothing to draw the eye to.
+fn trip_glow(phase: &Phase, landed: Option<f64>, now: f64) -> Option<(egui::Color32, f32)> {
+    if phase.is_live() {
+        let pulse = (now * 4.0).sin() * 0.5 + 0.5;
+        return Some((theme::WARN, 0.35 + 0.65 * pulse as f32));
+    }
+    let age = now - landed?;
+    (0.0..LANDED_GLOW)
+        .contains(&age)
+        .then(|| (theme::OK, (1.0 - age / LANDED_GLOW) as f32))
+}
+
 fn mark_colour(mark: Mark) -> egui::Color32 {
     match mark {
         Mark::Done => theme::OK,
@@ -6066,6 +6140,50 @@ mod tests {
         let painted = painted_text(&mut board).join("\n");
         assert!(painted.contains("รอคิวในสมุด"), "{painted}");
         assert!(painted.contains("รอมาแล้ว"), "{painted}");
+    }
+
+    #[test]
+    fn an_order_glows_while_it_travels_and_briefly_after_the_board_sees_it_land() {
+        let board = sending_board(SENT_AT);
+        let sent = crate::time::unix_of(SENT_AT).unwrap();
+        let trip = journey::trips(&board.bot.rows).remove(0);
+        let mut watch = None;
+
+        // On its way: amber.
+        watch_landing(&mut watch, &trip, &Phase::Looking, sent + 2.0);
+        assert_eq!(
+            trip_glow(&Phase::Looking, None, sent + 2.0).unwrap().0,
+            theme::WARN
+        );
+
+        // The board hears of the fill five seconds after it happened - as on
+        // testnet - and still shows it landing, from the moment it heard.
+        watch_landing(&mut watch, &trip, &Phase::Filled, sent + 5.0);
+        let landed = watch.as_ref().unwrap().2;
+        assert_eq!(landed, Some(sent + 5.0));
+        let (colour, strength) = trip_glow(&Phase::Filled, landed, sent + 5.5).unwrap();
+        assert_eq!(colour, theme::OK);
+        assert!(strength > 0.8);
+        assert!(trip_glow(&Phase::Filled, landed, sent + 5.0 + LANDED_GLOW + 0.1).is_none());
+
+        // Staying filled does not restart the glow.
+        watch_landing(&mut watch, &trip, &Phase::Filled, sent + 30.0);
+        assert_eq!(watch.as_ref().unwrap().2, Some(sent + 5.0));
+    }
+
+    #[test]
+    fn opening_the_board_on_an_old_fill_does_not_light_it_up() {
+        let board = sending_board(SENT_AT);
+        let sent = crate::time::unix_of(SENT_AT).unwrap();
+        let trip = journey::trips(&board.bot.rows).remove(0);
+        let mut watch = None;
+        watch_landing(&mut watch, &trip, &Phase::Filled, sent + 3600.0);
+        assert_eq!(watch.as_ref().unwrap().2, None);
+
+        // But a fill that beat the board by a second or two still counts.
+        let mut watch = None;
+        watch_landing(&mut watch, &trip, &Phase::Filled, sent + 3.0);
+        assert_eq!(watch.as_ref().unwrap().2, Some(sent + 3.0));
     }
 
     #[test]
