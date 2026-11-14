@@ -6,7 +6,7 @@
 #   board-server.exe   เซิร์ฟเวอร์ของบอร์ด (build แบบ release)
 #   dist\              หน้าเว็บที่ build แล้ว
 #   start.ps1          เปิดบอร์ดคำสั่งเดียว
-#   อ่านก่อน.txt        วิธีใช้สามบรรทัด
+#   README.txt        วิธีใช้สามบรรทัด
 #
 # นักเรียนแตก zip ไว้ "ในโฟลเดอร์บอท" (โฟลเดอร์ที่มี tradebot\ config\ logs\)
 # ให้เป็น <โฟลเดอร์บอท>\board-pack\ แล้วรัน start.ps1 ข้างใน
@@ -89,7 +89,7 @@ $readme = @'
 บอร์ดอ่านไฟล์ที่บอทเขียนอย่างเดียว ส่งออเดอร์ไม่ได้โดยโครงสร้าง
 ไม่มีกุญแจก็เปิดได้ ข้อมูลตลาดเป็นของสาธารณะ
 '@
-[System.IO.File]::WriteAllText((Join-Path $out "อ่านก่อน.txt"), $readme, $utf8bom)
+[System.IO.File]::WriteAllText((Join-Path $out "README.txt"), $readme, $utf8bom)
 
 if (Test-Path $zip) { Remove-Item -Force $zip -ErrorAction Stop }
 Compress-Archive -Path (Join-Path $out "*") -DestinationPath $zip -ErrorAction Stop

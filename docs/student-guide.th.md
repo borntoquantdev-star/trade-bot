@@ -330,7 +330,7 @@ tradebot --live --config config/testnet.yaml --iterations 24 --close-at-end
 - **แม่แบบบน GitHub ยังเป็นรุ่นก่อนมีบอร์ด** (ณ 14 พ.ย.) ถ้ายังไม่ได้ push งานล่าสุด
   ให้แจก **ชุดนักเรียน** แทนการ `gh repo create --template`:
   `board\pack.ps1` แล้ว `tools\student-kit.ps1` → `board\pack\student-kit.zip`
-  (โค้ดบอท + บอร์ดพกพา + `เริ่มที่นี่.txt` สคริปต์ตรวจแล้วว่าไม่มี `.env` / `logs` ติดไป)
+  (โค้ดบอท + บอร์ดพกพา + `00-START-HERE.txt` สคริปต์ตรวจแล้วว่าไม่มี `.env` / `logs` ติดไป)
 - ใบงานสำหรับคาบ: `docs/student-lab.th.md`
 - เปิด `#trip` ตอนรันขั้น 6 หน้าห้อง: เห็นออเดอร์เดินทางจนจับคู่ภายในไม่กี่ร้อย ms
 - ประโยคที่ควรพูดซ้ำ: **"บอทที่ดีส่วนใหญ่ไม่ทำอะไร"** และ **"ping_pong ไม่ใช่กลยุทธ์"**

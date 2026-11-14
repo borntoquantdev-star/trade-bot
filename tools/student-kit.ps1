@@ -7,7 +7,7 @@
 # ได้ board\pack\student-kit.zip ข้างในเป็นโฟลเดอร์ trade-bot\ ที่มี
 #   โค้ดบอททั้งหมด         จาก git (ของที่ commit แล้วเท่านั้น: ไม่มี logs\ ไม่มี .env ไม่มี .venv)
 #   board-pack\            บอร์ดพกพา วางตรงตำแหน่งที่ start.ps1 ของมันหาไฟล์บอทเจอ
-#   เริ่มที่นี่.txt          สามคำสั่งแรก
+#   00-START-HERE.txt          สามคำสั่งแรก
 #
 # ทำไมต้องมี: แม่แบบบน GitHub ที่คู่มือให้ clone ยังเป็นรุ่นก่อนมีบอร์ด
 # จนกว่าจะ push งานล่าสุดขึ้นไป zip นี้คือทางเดียวที่นักเรียนจะได้รุ่นเดียวกับที่ผู้สอนใช้
@@ -58,7 +58,7 @@ $readme = @'
 คู่มือเต็ม: docs\student-guide.th.md   ใบงาน: docs\student-lab.th.md
 '@
 $utf8bom = New-Object System.Text.UTF8Encoding($true)
-[System.IO.File]::WriteAllText((Join-Path $bot "เริ่มที่นี่.txt"), $readme, $utf8bom)
+[System.IO.File]::WriteAllText((Join-Path $bot "00-START-HERE.txt"), $readme, $utf8bom)
 
 Write-Host "3/3 ตรวจว่าไม่มีความลับติดไปแล้วบีบ..." -ForegroundColor Cyan
 $bad = Get-ChildItem -Recurse -Force $bot | Where-Object {
