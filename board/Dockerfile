@@ -4,6 +4,15 @@
 #   docker build -t tradebot-board .
 #   docker run -p 4340:4340 -v "$PWD/../logs:/logs" tradebot-board
 #
+# The stage cards and the code card also read the bot's own source, to show
+# the lines it ran. Mount the whole bot folder read-only for those:
+#
+#   docker run -p 4340:4340 -v "$PWD/..:/bot:ro" #     -e BOARD_CODE=/bot -e BOARD_LOGS=/bot/logs -e BOARD_CONFIG=config/config.yaml #     tradebot-board
+#
+# Without it the board still runs; the code cards say which file they cannot
+# open. The order-trip card needs the account key (GRVT_* in the environment,
+# or BOARD_ENV_FILE pointing at a mounted .env) to follow an order past "sent".
+#
 # On Railway, PORT is set for you and no volume is mounted: the board still
 # opens and shows the live market, because the market stream is public and
 # runs in the browser, not here.
