@@ -35,6 +35,9 @@ use crate::exchange::{clock, Num};
 // Funding last: it is charged on the hour at most, so a minute is plenty.
 const EVERY: [f64; 7] = [3.0, 3.0, 4.0, 20.0, 20.0, 30.0, 60.0];
 
+/// How often the order lists are asked for while an order is on its way.
+const HURRY: f64 = 2.0;
+
 /// How many rows of each history. Enough to fill a card and scroll a little.
 const ROWS: u32 = 40;
 
@@ -164,6 +167,13 @@ pub struct Order {
     pub reduce_only: bool,
     pub client_order_id: String,
     pub at: String,
+    /// The exchange's own id, once it has given one.
+    pub order_id: String,
+    /// When the exchange took the order in, and when its state last moved,
+    /// as Unix seconds to the nanosecond the exchange wrote. These are what
+    /// "how long did it wait" is measured with; `at` is only for printing.
+    pub created: Option<f64>,
+    pub updated: Option<f64>,
 }
 
 impl Order {
@@ -196,6 +206,11 @@ pub struct Fill {
     pub realized: Option<Num>,
     pub currency: String,
     pub at: String,
+    /// Which order this trade filled: the bot's id for it, and the exchange's.
+    pub client_order_id: String,
+    pub order_id: String,
+    /// When it traded, as Unix seconds.
+    pub when: Option<f64>,
 }
 
 /// One funding payment, as the exchange recorded it.
@@ -260,6 +275,18 @@ fn text_of(value: Option<&Value>) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_owned()
+}
+
+/// GRVT writes its times as nanoseconds since 1970, in a string. As Unix
+/// seconds, or `None` for anything that is not one.
+pub fn nanos_of(value: Option<&Value>) -> Option<f64> {
+    let text = match value? {
+        Value::String(text) => text.trim().to_owned(),
+        Value::Number(number) => number.to_string(),
+        _ => return None,
+    };
+    let nanos: i128 = text.parse().ok()?;
+    (nanos > 0).then(|| nanos as f64 / 1e9)
 }
 
 fn flag_of(value: Option<&Value>) -> bool {
@@ -340,6 +367,9 @@ pub fn read_orders(result: &Value) -> Vec<Order> {
                 reduce_only: flag_of(row.get("reduce_only")),
                 client_order_id: text_of(meta.and_then(|meta| meta.get("client_order_id"))),
                 at: clock(&text_of(meta.and_then(|meta| meta.get("create_time_at")))),
+                order_id: text_of(row.get("order_id")),
+                created: nanos_of(meta.and_then(|meta| meta.get("create_time"))),
+                updated: nanos_of(state.and_then(|state| state.get("update_time"))),
             }
         })
         .collect()
@@ -359,6 +389,9 @@ pub fn read_fills(result: &Value) -> Vec<Fill> {
             realized: Num::from(row.get("realized_pnl")),
             currency: text_of(row.get("fee_currency")),
             at: clock(&text_of(row.get("event_time_at"))),
+            client_order_id: text_of(row.get("client_order_id")),
+            order_id: text_of(row.get("order_id")),
+            when: nanos_of(row.get("event_time")),
         })
         .collect()
 }
@@ -519,6 +552,17 @@ impl Account {
             }
             Answer::Missing(reason) => self.load[index] = Load::Missing(reason),
             Answer::Failed(reason) => self.load[index] = Load::Failed(reason),
+        }
+    }
+
+    /// Ask again soon for the three lists an order moves through. Called
+    /// while one of the bot's orders is still on its way, so the board sees
+    /// it land in the book and fill within a couple of seconds instead of a
+    /// history refresh later. Only ever brings a fetch forward.
+    pub fn hurry(&mut self, now: f64) {
+        for kind in [Kind::OpenOrders, Kind::Orders, Kind::Fills] {
+            let index = kind.index();
+            self.due[index] = self.due[index].min(now + HURRY);
         }
     }
 

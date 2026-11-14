@@ -18,6 +18,7 @@ pub mod exchange;
 pub mod feed;
 pub mod fonts;
 pub mod history;
+pub mod journey;
 pub mod market;
 pub mod store;
 pub mod theme;

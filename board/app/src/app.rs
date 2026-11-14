@@ -14,6 +14,7 @@ use crate::equity;
 use crate::exchange::{self, Exchange, Kind as Market};
 use crate::feed::{Feed, Health};
 use crate::history::{self, Past};
+use crate::journey::{self, Mark, Phase, Trip};
 use crate::market::{parse, Env};
 use crate::theme;
 use crate::traces::Traces;
@@ -36,7 +37,8 @@ const INSTRUMENTS: [&str; 4] = [
 /// into empty space has lost the board.
 const VIEWS: [(&str, [f32; 5]); 5] = [
     ("ตลาด", [0.0, 0.0, 1450.0, 1060.0, 0.0]),
-    ("บอท", [350.0, 1130.0, 1860.0, 1670.0, 0.0]),
+    // Wide enough for the order's trip, which sits past the last stage.
+    ("บอท", [350.0, 1130.0, 2270.0, 1670.0, 0.0]),
     ("ทดสอบ", [20.0, 1680.0, 1330.0, 2250.0, 0.0]),
     // The account as the exchange holds it, which is the zone that settles
     // an argument between the bot's own figure and the website's.
@@ -141,6 +143,10 @@ pub struct Board {
     /// Replay the newest order as soon as the trail arrives. Set by the
     /// `order` link, which is asked for before there is a trail to look in.
     replay_order_on_load: bool,
+    /// Which order the trip card is following, by the tick that sent it.
+    /// `None` follows the newest. A replayed tick that sent one wins over
+    /// both, so stepping the pipeline onto an order shows that order's trip.
+    trip_pick: Option<String>,
     /// Why pressing a run did not open it, until the next press.
     run_note: Option<String>,
     /// When the walk was paused, if it is.
@@ -239,6 +245,9 @@ impl Default for Board {
         // short verticals instead of long lines passing behind other cards.
         slots.insert("account", Slot::new(970.0, 1380.0, 300.0, 250.0));
         slots.insert("log", Slot::new(1390.0, 1380.0, 430.0, 250.0));
+        // Past the last stage, as tall as the stage and the row under it:
+        // an order's trip is five steps and a list of fills, read top down.
+        slots.insert("trip", Slot::new(1840.0, 1160.0, 400.0, 470.0));
         slots.insert("backtest", Slot::new(40.0, 1700.0, 390.0, 320.0));
         slots.insert("quality", Slot::new(450.0, 1700.0, 390.0, 320.0));
         slots.insert("equity", Slot::new(870.0, 1700.0, 420.0, 320.0));
@@ -283,6 +292,7 @@ impl Default for Board {
             walk_rate: WALK_RATES[DEFAULT_RATE].0,
             replay: None,
             replay_order_on_load: false,
+            trip_pick: None,
             run_note: None,
             seen_tick: String::new(),
             seen_at: 0.0,
@@ -342,6 +352,17 @@ impl Board {
         if wanted == "order" || wanted == "ออเดอร์" {
             self.scene_rect = view(1);
             self.replay_order_on_load = true;
+            return true;
+        }
+        // `trip` is the send stage and the order's trip beside it, close
+        // enough to read: framed from where those two cards are now, so it
+        // still works after somebody has moved them.
+        if wanted == "trip" || wanted == "ส่งคำสั่ง" {
+            self.scene_rect = self
+                .slot("s4")
+                .rect()
+                .union(self.slot("trip").rect())
+                .expand(24.0);
             return true;
         }
         let found = VIEWS
@@ -498,6 +519,12 @@ impl eframe::App for Board {
         self.mark_tick(now);
         self.exchange.watch(&self.feed.instrument.clone());
         self.exchange.poll(now);
+        // An order still on its way: ask the exchange about it every couple
+        // of seconds instead of every twenty, so "filled" shows up when it
+        // happens rather than a card-refresh later.
+        if self.newest_trip_is_live() {
+            self.account_data.hurry(now);
+        }
         self.account_data.poll(now);
         self.past.poll(now);
 
@@ -826,6 +853,7 @@ impl Board {
         }
         self.code_card(ui, now);
         self.log_card(ui);
+        self.trip_card(ui);
         self.backtest_card(ui);
         self.quality_card(ui);
         self.equity_card(ui);
@@ -1821,6 +1849,297 @@ impl Board {
         }
     }
 
+    // ------------------------------------------------------------ the trip
+    // ออกแบบโดย Claude (คืน 14 พ.ย. 2026) — รอรีวิว
+
+    /// The trip on screen, the exchange's view of it, where it has got to,
+    /// and which of all the trips it is (0-based, and how many).
+    fn trip_now(&self) -> Option<(Trip, journey::Seen, Phase, usize, usize)> {
+        let trips = journey::trips(&self.bot.rows);
+        if trips.is_empty() {
+            return None;
+        }
+        let replayed = self
+            .replay
+            .as_ref()
+            .and_then(|at| trips.iter().rposition(|trip| &trip.tick_at == at));
+        let picked = self
+            .trip_pick
+            .as_ref()
+            .and_then(|at| trips.iter().rposition(|trip| &trip.tick_at == at));
+        let index = replayed.or(picked).unwrap_or(trips.len() - 1);
+        let trip = trips[index].clone();
+        let account = &self.account_data;
+        let seen = journey::find(&trip, &account.open_orders, &account.orders, &account.fills);
+        let phase = journey::phase(&trip, &seen, account.has_key(), unix_now());
+        Some((trip, seen, phase, index, trips.len()))
+    }
+
+    fn newest_trip_is_live(&self) -> bool {
+        let Some(trip) = self.bot.rows.iter().rev().find_map(Trip::from_row) else {
+            return false;
+        };
+        let account = &self.account_data;
+        let seen = journey::find(&trip, &account.open_orders, &account.orders, &account.fills);
+        journey::phase(&trip, &seen, account.has_key(), unix_now()).is_live()
+    }
+
+    /// One order, followed from the tick that decided it to the trade that
+    /// filled it: how long each leg took, whether it is still waiting in
+    /// the book, how much of it has traded and at what price.
+    fn trip_card(&mut self, ui: &mut egui::Ui) {
+        let mut slot = self.slot("trip");
+        let now = unix_now();
+        let current = self.trip_now();
+        let trips = journey::trips(&self.bot.rows);
+        let mut pick: Option<Option<String>> = None;
+        let mut replay: Option<String> = None;
+
+        let (state, status) = match &current {
+            None => (theme::State::Idle, "ยังไม่ได้ส่ง".to_string()),
+            Some((trip, seen, phase, ..)) => {
+                let t = journey::times(trip, seen, phase, now);
+                let state = if phase.is_bad() {
+                    theme::State::Bad
+                } else if phase.is_live() {
+                    theme::State::Wip
+                } else if *phase == Phase::Filled {
+                    theme::State::Ok
+                } else {
+                    theme::State::Idle
+                };
+                let status = match (phase, t.total) {
+                    (Phase::Waiting { .. }, Some(total)) => format!("รอ {}", journey::span(total)),
+                    (Phase::Looking, _) => "กำลังหา".to_string(),
+                    (Phase::Filled, Some(total)) => format!("ครบใน {}", journey::span(total)),
+                    (Phase::Filled, None) => "ครบ".to_string(),
+                    (Phase::Simulated, _) => "จำลอง".to_string(),
+                    (Phase::Blind, _) => "ตามต่อไม่ได้".to_string(),
+                    (Phase::Refused(_), _) | (Phase::Rejected(_), _) => "ไม่รับ".to_string(),
+                    (Phase::Cancelled { .. }, _) => "ยกเลิก".to_string(),
+                    _ => "ไม่เจอ".to_string(),
+                };
+                (state, status)
+            }
+        };
+        if current
+            .as_ref()
+            .is_some_and(|(_, _, phase, ..)| phase.is_live())
+        {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        card::show(
+            ui,
+            &mut slot,
+            "เส้นทางออเดอร์ · ตามจนจับคู่",
+            &status,
+            state,
+            |ui| {
+                let Some((trip, seen, phase, index, count)) = &current else {
+                    ui.label(
+                        egui::RichText::new(
+                            "ยังไม่มีออเดอร์ในบันทึกของบอท · พอกลยุทธ์ออกสัญญาณและด่านความเสี่ยง\
+                             อนุมัติ การ์ดนี้จะตามคำสั่งตั้งแต่ส่งจนจับคู่",
+                        )
+                        .size(10.5)
+                        .color(theme::FAINT),
+                    );
+                    return;
+                };
+
+                // What it was, in one line.
+                let price = if trip.limit.is_empty() {
+                    "ราคาตลาด".to_string()
+                } else {
+                    format!("@ {}", bot::tidy(&trip.limit, 2))
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} {}", trip.side(), bot::tidy(&trip.qty, 6)))
+                            .size(13.0)
+                            .strong()
+                            .color(if trip.is_buy { theme::OK } else { theme::BAD }),
+                    );
+                    ui.label(egui::RichText::new(price).size(11.5).color(theme::MUTED));
+                    ui.label(
+                        egui::RichText::new(trip.kind())
+                            .size(10.0)
+                            .color(theme::FAINT),
+                    );
+                });
+                ui.label(egui::RichText::new(phase.headline()).size(11.5).color(
+                    if phase.is_bad() {
+                        theme::BAD
+                    } else if phase.is_live() {
+                        theme::WARN
+                    } else {
+                        theme::TEXT
+                    },
+                ));
+                ui.add_space(6.0);
+
+                // The five steps, as a timeline down the left edge.
+                let pulse = (now * 4.0).sin() as f32 * 0.5 + 0.5;
+                let mut dots: Vec<(egui::Pos2, Mark)> = Vec::with_capacity(5);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                for step in journey::steps(trip, seen, phase, now) {
+                    ui.horizontal_top(|ui| {
+                        let (gutter, _) =
+                            ui.allocate_exact_size(egui::vec2(18.0, 15.0), Sense::hover());
+                        let centre = gutter.center();
+                        let colour = mark_colour(step.mark);
+                        let painter = ui.painter();
+                        match step.mark {
+                            Mark::Done | Mark::Failed => {
+                                painter.circle_filled(centre, 5.0, colour);
+                            }
+                            Mark::Now => {
+                                painter.circle_filled(centre, 4.0, colour);
+                                painter.circle_stroke(
+                                    centre,
+                                    5.5 + pulse * 3.0,
+                                    egui::Stroke::new(1.5, colour.gamma_multiply(1.0 - pulse)),
+                                );
+                            }
+                            Mark::Todo => {
+                                painter.circle_stroke(centre, 4.5, egui::Stroke::new(1.2, colour));
+                            }
+                        }
+                        dots.push((centre, step.mark));
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            ui.label(egui::RichText::new(step.name).size(11.0).strong().color(
+                                if step.mark == Mark::Todo {
+                                    theme::FAINT
+                                } else {
+                                    theme::TEXT
+                                },
+                            ));
+                            if !step.detail.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(&step.detail)
+                                        .size(9.5)
+                                        .color(theme::DIM),
+                                );
+                            }
+                        });
+                    });
+                }
+                // The line joining the dots, drawn after them so it knows
+                // where they landed; it stops short of each dot.
+                for pair in dots.windows(2) {
+                    let (from, _) = pair[0];
+                    let (to, mark) = pair[1];
+                    let colour = if mark == Mark::Todo {
+                        theme::FAINT.gamma_multiply(0.5)
+                    } else {
+                        theme::WIRE
+                    };
+                    ui.painter().line_segment(
+                        [from + egui::vec2(0.0, 7.0), to - egui::vec2(0.0, 7.0)],
+                        egui::Stroke::new(1.5, colour),
+                    );
+                }
+
+                // How much has traded, as a bar.
+                if let Some(size) = seen.size(trip).filter(|size| *size > 0.0) {
+                    if seen.order.is_some() || !seen.fills.is_empty() {
+                        ui.add_space(6.0);
+                        let done = (seen.filled_qty() / size).clamp(0.0, 1.0) as f32;
+                        let (bar, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 6.0),
+                            Sense::hover(),
+                        );
+                        ui.painter().rect_filled(bar, 3.0, theme::HEAD);
+                        let mut filled = bar;
+                        filled.set_width(bar.width() * done);
+                        ui.painter().rect_filled(filled, 3.0, theme::OK);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "จับคู่แล้ว {} จาก {} ({:.0}%)",
+                                journey::trim(seen.filled_qty()),
+                                journey::trim(size),
+                                done * 100.0
+                            ))
+                            .size(9.5)
+                            .color(theme::FAINT),
+                        );
+                    }
+                }
+
+                // Each fill, timed from the send - on this computer's clock.
+                if !seen.fills.is_empty() {
+                    let skew = journey::skew_of(trip, seen);
+                    ui.add_space(4.0);
+                    for fill in seen.fills.iter().take(4) {
+                        let after = match (fill.when, trip.start()) {
+                            (Some(when), Some(start)) => {
+                                format!("+{}", journey::span(when - skew - start))
+                            }
+                            _ => fill.at.clone(),
+                        };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{after} · {} @ {} · {}",
+                                opt_text(&fill.size),
+                                opt_text(&fill.price),
+                                if fill.is_taker { "taker" } else { "maker" }
+                            ))
+                            .size(9.5)
+                            .color(theme::MUTED),
+                        );
+                    }
+                    if seen.fills.len() > 4 {
+                        ui.label(
+                            egui::RichText::new(format!("และอีก {} ไม้", seen.fills.len() - 4))
+                                .size(9.0)
+                                .color(theme::FAINT),
+                        );
+                    }
+                }
+
+                // Which order, and a way to the others.
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let small =
+                        |text: &str| egui::Button::new(egui::RichText::new(text).size(9.5)).small();
+                    if ui.add_enabled(*index > 0, small("‹")).clicked() {
+                        pick = Some(Some(trips[index - 1].tick_at.clone()));
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("ใบที่ {} / {}", index + 1, count))
+                            .size(9.5)
+                            .color(theme::DIM),
+                    );
+                    if ui.add_enabled(index + 1 < *count, small("›")).clicked() {
+                        pick = Some(Some(trips[index + 1].tick_at.clone()));
+                    }
+                    if ui.add_enabled(index + 1 < *count, small("ล่าสุด")).clicked() {
+                        pick = Some(None);
+                    }
+                    if ui.add(small("ดูโค้ด tick นี้")).clicked() {
+                        replay = Some(trip.tick_at.clone());
+                    }
+                });
+            },
+        );
+        self.put("trip", slot);
+        if let Some(choice) = pick {
+            // Stepping the trips leaves a replay of some other tick behind;
+            // otherwise the replay would keep overriding the pick.
+            self.trip_pick = choice;
+            if self.replaying() {
+                self.replay_at(None);
+            }
+        }
+        if let Some(at) = replay {
+            self.trip_pick = Some(at.clone());
+            self.replay_at(Some(at));
+        }
+    }
+
     /// The five stages as they stood on the tick being shown.
     ///
     /// Worked out from the trail up to and including that tick, so a
@@ -2138,6 +2457,18 @@ impl Board {
                 "ยังไม่เริ่ม".to_string(),
             ),
             None => ("", "", theme::State::Idle, String::new(), String::new()),
+        };
+        // The send stage ends where the exchange says it ends: once the bot
+        // has sent something, this card says how far it has got.
+        let detail = match (index, self.trip_now()) {
+            (3, Some((trip, seen, phase, ..))) if has => {
+                let t = journey::times(&trip, &seen, &phase, unix_now());
+                match t.total {
+                    Some(total) => format!("{} · {}", phase.headline(), journey::span(total)),
+                    None => phase.headline(),
+                }
+            }
+            _ => detail,
         };
         let title = format!("{}. {}", index + 1, label);
         // A mark price carries twenty digits of Decimal; a chip has room for
@@ -4396,6 +4727,22 @@ fn status_label(order: &account::Order) -> String {
     }
 }
 
+/// The wall clock as Unix seconds - what the exchange's timestamps are
+/// measured against. Zero when the platform will not say, which only makes
+/// a live count read as finished.
+fn unix_now() -> f64 {
+    crate::time::now_unix().unwrap_or(0.0)
+}
+
+fn mark_colour(mark: Mark) -> egui::Color32 {
+    match mark {
+        Mark::Done => theme::OK,
+        Mark::Now => theme::WARN,
+        Mark::Todo => theme::FAINT,
+        Mark::Failed => theme::BAD,
+    }
+}
+
 fn stale_if_failed(load: &Load, state: theme::State, status: String) -> (theme::State, String) {
     match load {
         Load::Failed(_) => (theme::State::Bad, "ข้อมูลค้าง".to_string()),
@@ -5630,6 +5977,121 @@ mod tests {
         }
     }
 
+    // --- the trip (ออกแบบโดย Claude คืน 14 พ.ย. 2026) ----------------------
+
+    const SENT_AT: &str = "2026-11-13T19:20:02.750000+00:00";
+
+    fn num(text: &str) -> Option<exchange::Num> {
+        exchange::Num::from(Some(&serde_json::Value::String(text.into())))
+    }
+
+    fn sending_board(sent: &str) -> Board {
+        let mut board = Board::default();
+        board.bot.rows = vec![bot::Row {
+            at: "2026-11-13T19:20:02.700000+00:00".into(),
+            order: Some(bot::Order {
+                side: "sell".into(),
+                qty: "0.143".into(),
+                limit_price: "68896.6".into(),
+                sent_at: sent.into(),
+                answered_ms: Some(380.0),
+                ..Default::default()
+            }),
+            receipt: Some(bot::Receipt {
+                broker_order_id: "0x00".into(),
+                venue_id: "3163306331".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+        board.bot.stages = bot::stages_of(&board.bot.rows, None);
+        board
+    }
+
+    fn on_the_exchange(status: &str, filled: &str, created: f64) -> account::Order {
+        account::Order {
+            size: num("0.143"),
+            price: num("68896.6"),
+            filled: num(filled),
+            status: status.into(),
+            client_order_id: "3163306331".into(),
+            order_id: "0xabc".into(),
+            created: Some(created),
+            updated: Some(created + 0.3),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_trip_card_follows_a_filled_order_to_the_end() {
+        let mut board = sending_board(SENT_AT);
+        let sent = crate::time::unix_of(SENT_AT).unwrap();
+        board.account_data.orders = vec![on_the_exchange("FILLED", "0.143", sent + 0.1)];
+        board.account_data.fills = vec![account::Fill {
+            size: num("0.143"),
+            price: num("68890"),
+            is_taker: true,
+            client_order_id: "3163306331".into(),
+            when: Some(sent + 0.25),
+            ..Default::default()
+        }];
+        let painted = painted_text(&mut board).join("\n");
+        for wanted in [
+            "เส้นทางออเดอร์",
+            "จับคู่ครบทั้งก้อน",
+            "380 ms",
+            "taker",
+            "ครบใน 250 ms",
+        ] {
+            assert!(painted.contains(wanted), "ไม่เห็น {wanted} · {painted}");
+        }
+    }
+
+    #[test]
+    fn the_send_stage_says_where_the_newest_order_has_got_to() {
+        let mut board = sending_board(SENT_AT);
+        let sent = crate::time::unix_of(SENT_AT).unwrap();
+        board.account_data.orders = vec![on_the_exchange("CANCELLED", "0", sent + 0.1)];
+        let painted = painted_text(&mut board).join("\n");
+        assert!(painted.contains("ยกเลิก · ไม่ได้จับคู่เลย"), "{painted}");
+    }
+
+    #[test]
+    fn an_order_waiting_in_the_book_counts_up_and_hurries_the_account() {
+        let now = unix_now();
+        let sent = crate::time::clock_iso(now - 5.0);
+        let mut board = sending_board(&sent);
+        board.account_data.open_orders = vec![on_the_exchange("OPEN", "0", now - 4.0)];
+        assert!(board.newest_trip_is_live());
+        let painted = painted_text(&mut board).join("\n");
+        assert!(painted.contains("รอคิวในสมุด"), "{painted}");
+        assert!(painted.contains("รอมาแล้ว"), "{painted}");
+    }
+
+    #[test]
+    fn with_no_order_yet_the_trip_card_says_what_it_will_show() {
+        let mut board = Board::default();
+        let painted = painted_text(&mut board).join("\n");
+        assert!(painted.contains("ยังไม่ได้ส่ง"), "{painted}");
+        assert!(!board.newest_trip_is_live());
+    }
+
+    #[test]
+    fn stepping_to_an_older_order_shows_that_one() {
+        let mut board = sending_board(SENT_AT);
+        let mut older = board.bot.rows[0].clone();
+        older.at = "2026-11-13T19:10:00+00:00".into();
+        older.order.as_mut().unwrap().side = "buy".into();
+        board.bot.rows.insert(0, older.clone());
+        board.trip_pick = Some(older.at.clone());
+        let (trip, _, _, index, count) = board.trip_now().unwrap();
+        assert!(trip.is_buy);
+        assert_eq!((index, count), (0, 2));
+        // A replay of the newer tick wins over the pick.
+        board.replay = Some(board.bot.rows[1].at.clone());
+        assert!(!board.trip_now().unwrap().0.is_buy);
+    }
+
     /// A board watching a bot that just ran the strategy.
     fn watching() -> Board {
         let mut board = Board::default();
@@ -6310,6 +6772,22 @@ mod tests {
         board.replay_at(Some("2026-11-01T00:00:00+00:00".into()));
         assert!(!board.replaying());
         assert_eq!(board.shown().unwrap().0, 2);
+    }
+
+    #[test]
+    fn the_trip_link_frames_the_send_stage_and_the_trip_together() {
+        let mut board = Board::default();
+        assert!(board.open_at("#trip"));
+        let framed = board.scene_rect;
+        assert!(framed.contains_rect(board.slot("s4").rect()));
+        assert!(framed.contains_rect(board.slot("trip").rect()));
+        assert!(
+            framed.width() < view(1).width(),
+            "closer than the whole pipeline, or it is not a focus"
+        );
+        assert!(board.open_at(
+            "%E0%B8%AA%E0%B9%88%E0%B8%87%E0%B8%84%E0%B8%B3%E0%B8%AA%E0%B8%B1%E0%B9%88%E0%B8%87"
+        ));
     }
 
     #[test]

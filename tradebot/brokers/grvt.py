@@ -291,6 +291,20 @@ def numeric_client_order_id(client_order_id: str) -> int:
         raise BrokerError(f"client order id {client_order_id!r} is not hexadecimal") from exc
 
 
+def read_venue_client_id(payload: Any, fallback: str = "") -> str:
+    """The client order id GRVT filed the order under, as text.
+
+    The create-order reply echoes the order back, ``metadata`` and all; for an
+    exit the SDK picks the id itself, so the reply is the only place it shows.
+    Recording only - a reply without it is not an error.
+    """
+    if isinstance(payload, Mapping):
+        metadata = _unwrap(payload).get("metadata")
+        if isinstance(metadata, Mapping) and metadata.get("client_order_id"):
+            return str(metadata["client_order_id"])
+    return fallback
+
+
 # --- the broker -------------------------------------------------------------
 
 
@@ -487,6 +501,9 @@ class GrvtBroker:
             limit_price=order.limit_price,
             simulated=False,
             raw=payload if isinstance(payload, Mapping) else {},
+            venue_client_order_id=read_venue_client_id(
+                payload, str(numeric_client_order_id(order.client_order_id))
+            ),
         )
 
     def close_position(self, symbol: str) -> OrderReceipt | None:
@@ -516,6 +533,7 @@ class GrvtBroker:
             qty=held.qty,
             limit_price=held.entry_price,
             raw=payload if isinstance(payload, Mapping) else {},
+            venue_client_order_id=read_venue_client_id(payload),
         )
 
     def cancel_order(self, symbol: str, client_order_id: str) -> Any:

@@ -578,3 +578,48 @@ def test_a_strategy_that_explodes_on_the_way_out_does_not_trap_the_position(tmp_
     result = engine.tick()
     assert result.exit_reason is None
     assert SYMBOL in broker.fetch_positions()
+
+
+# --- the trip to the exchange --------------------------------------------------
+
+
+def _rows(tmp_path):
+    return [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
+
+
+def test_the_trail_says_when_an_order_left_and_how_long_the_answer_took(tmp_path):
+    engine, _, _ = make_engine(tmp_path)
+    result = engine.tick()
+    assert result.sent is not None and result.sent.ms >= 0
+    order = _rows(tmp_path)[0]["order"]
+    assert datetime.fromisoformat(order["sent_at"]).tzinfo is not None
+    assert order["answered_ms"] >= 0
+
+
+def test_an_order_the_broker_refused_still_says_how_long_the_refusal_took(tmp_path):
+    engine, broker, _ = make_engine(tmp_path)
+
+    def refuse(_order):
+        raise BrokerError("margin")
+
+    broker.place_order = refuse  # type: ignore[method-assign]
+    engine.tick()
+    row = _rows(tmp_path)[0]
+    assert "receipt" not in row
+    assert "answered_ms" in row["order"], "การโดนปฏิเสธก็เป็นการเดินทางไปตลาดหนึ่งรอบ"
+
+
+def test_an_exit_is_timed_too(tmp_path):
+    engine, _, _ = make_engine(tmp_path, strategy=Exiter(reason=None))
+    engine.tick()
+    engine.strategy.reason = "target reached"
+    engine.tick()
+    exit_row = _rows(tmp_path)[1]["exit"]
+    assert "sent_at" in exit_row and exit_row["answered_ms"] >= 0
+
+
+def test_a_tick_that_sends_nothing_carries_no_timing(tmp_path):
+    engine, _, _ = make_engine(tmp_path, strategy=ScriptedStrategy(side=None))
+    engine.tick()
+    row = _rows(tmp_path)[0]
+    assert "order" not in row and "exit" not in row

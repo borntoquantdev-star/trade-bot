@@ -44,6 +44,10 @@ class OrderReceipt:
     limit_price: Decimal
     simulated: bool = False
     raw: Mapping[str, Any] = field(default_factory=dict)
+    #: The id the exchange itself files this order under, when that is not
+    #: ``client_order_id`` (GRVT only carries a uint32).  It is what lets
+    #: someone find this order again in the exchange's own order history.
+    venue_client_order_id: str = ""
 
 
 @runtime_checkable

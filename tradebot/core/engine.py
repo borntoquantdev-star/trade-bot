@@ -109,6 +109,22 @@ class EngineState:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+@dataclass(frozen=True)
+class Sending:
+    """When an order left for the exchange, and how long the answer took.
+
+    Wall-clock time, not the engine's clock: this is a measurement of the
+    trip to the exchange, which a test's frozen clock would say took no time.
+    """
+
+    at: datetime
+    ms: float
+
+
+def _since(began: float) -> float:
+    return round((time.perf_counter() - began) * 1000, 1)
+
+
 @dataclass
 class TickResult:
     """What happened in one iteration, for logs, tests and the audit trail."""
@@ -125,6 +141,9 @@ class TickResult:
     exit_reason: str | None = None
     exit_receipt: OrderReceipt | None = None
     error: str | None = None
+    #: The trip to the exchange for the order, and for the exit.
+    sent: Sending | None = None
+    exit_sent: Sending | None = None
 
     @property
     def order(self) -> SizedOrder | None:
@@ -368,10 +387,13 @@ class Engine:
                 return self._record(result)
 
             self.log.info(explain(decision))
+            sent_at, began = datetime.now(timezone.utc), time.perf_counter()
             try:
                 result.receipt = self.broker.place_order(decision)
             except BrokerError as exc:
                 result.error = f"order rejected by broker: {exc}"
+            result.sent = Sending(sent_at, _since(began))
+            if result.error is not None:
                 self.log.error(result.error)
                 return self._record(result)
 
@@ -508,10 +530,13 @@ class Engine:
             position=market.position,
             exit_reason=reason,
         )
+        sent_at, began = datetime.now(timezone.utc), time.perf_counter()
         try:
             result.exit_receipt = self.broker.close_position(market.symbol)
         except BrokerError as exc:
             result.error = f"close rejected by broker: {exc}"
+        result.exit_sent = Sending(sent_at, _since(began))
+        if result.error is not None:
             self.log.error(result.error)
             return self._record(result)
         self.log.info(
@@ -568,11 +593,16 @@ class Engine:
                 "limit_price": format(result.order.limit_price, "f"),
                 "risk_amount": format(result.order.risk_amount, "f"),
             }
+            if result.sent is not None:
+                row["order"]["sent_at"] = result.sent.at.isoformat()
+                row["order"]["answered_ms"] = result.sent.ms
         if result.receipt is not None:
             row["receipt"] = {
                 "broker_order_id": result.receipt.broker_order_id,
                 "simulated": result.receipt.simulated,
             }
+            if result.receipt.venue_client_order_id:
+                row["receipt"]["venue_id"] = result.receipt.venue_client_order_id
         if result.exit_reason is not None:
             row["exit"] = {
                 "reason": result.exit_reason,
@@ -581,6 +611,11 @@ class Engine:
                 ),
                 "simulated": (result.exit_receipt.simulated if result.exit_receipt else False),
             }
+            if result.exit_sent is not None:
+                row["exit"]["sent_at"] = result.exit_sent.at.isoformat()
+                row["exit"]["answered_ms"] = result.exit_sent.ms
+            if result.exit_receipt is not None and result.exit_receipt.venue_client_order_id:
+                row["exit"]["venue_id"] = result.exit_receipt.venue_client_order_id
         if result.error:
             row["error"] = result.error
         trace = self._trace.as_json()

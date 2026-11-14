@@ -412,3 +412,28 @@ def test_the_factory_picks_the_broker_for_the_configured_exchange():
 
     hl = build_live_broker(load_config(data={"exchange": "hyperliquid"}, env={}))
     assert hl.name == "hyperliquid"
+
+
+# --- finding the order again on the exchange ----------------------------------
+
+
+def test_an_entry_remembers_the_id_the_exchange_files_it_under():
+    # GRVT answers a create with order id "0x00" - the real id comes later -
+    # so the only handle on the order in the exchange's history is the
+    # uint32 client id it was sent with.
+    order = approved_order()
+    receipt = broker().place_order(order)
+    assert receipt.venue_client_order_id == str(numeric_client_order_id(order.client_order_id))
+
+
+def test_an_exit_remembers_the_id_the_sdk_chose_for_it():
+    answer = {"result": {"order_id": "0x00", "metadata": {"client_order_id": "4087321"}}}
+    receipt = broker(create_order=answer).close_position(SYMBOL)
+    assert receipt is not None
+    assert receipt.venue_client_order_id == "4087321"
+
+
+def test_a_reply_without_the_echo_leaves_the_exit_id_empty_rather_than_failing():
+    receipt = broker().close_position(SYMBOL)
+    assert receipt is not None
+    assert receipt.venue_client_order_id == ""

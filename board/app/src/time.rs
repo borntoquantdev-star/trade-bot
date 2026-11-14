@@ -88,6 +88,52 @@ pub fn utc_seconds(iso: &str) -> Option<i64> {
     Some(seconds - offset_minutes * 60)
 }
 
+/// Like [`utc_seconds`], keeping the fraction of a second: the bot writes
+/// microseconds, and "the exchange answered in 0.38 seconds" needs them.
+pub fn unix_of(iso: &str) -> Option<f64> {
+    let whole = utc_seconds(iso)? as f64;
+    let clock = iso
+        .trim()
+        .split_once('T')
+        .or_else(|| iso.trim().split_once(' '))?
+        .1;
+    let fraction = match clock.split_once('.') {
+        Some((_, rest)) => {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                0.0
+            } else {
+                format!("0.{digits}").parse::<f64>().ok()?
+            }
+        }
+        None => 0.0,
+    };
+    Some(whole + fraction)
+}
+
+/// Unix seconds back to an ISO-8601 UTC timestamp with microseconds - the
+/// shape the bot writes, for tests that need "five seconds ago".
+pub fn clock_iso(unix: f64) -> String {
+    let whole = unix.floor();
+    let parts = from_seconds(whole as i64);
+    let micros = (((unix - whole) * 1e6).round() as u32).min(999_999);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{micros:06}+00:00",
+        parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second
+    )
+}
+
+/// Unix seconds as a Thai wall clock to a tenth of a second, for timings.
+pub fn clock_tenths(unix: f64) -> String {
+    let whole = unix.floor();
+    let local = from_seconds(whole as i64 + OFFSET_HOURS * 3600);
+    let tenth = (((unix - whole) * 10.0).floor() as u32).min(9);
+    format!(
+        "{:02}:{:02}:{:02}.{tenth}",
+        local.hour, local.minute, local.second
+    )
+}
+
 /// `16:47:11+00:00` -> (`16:47:11`, 0). `Z` and a missing offset are both 0.
 fn split_offset(rest: &str) -> Option<(&str, i64)> {
     if let Some(clock) = rest.strip_suffix('Z') {
@@ -198,6 +244,20 @@ pub fn now_local() -> Option<Local> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fraction_of_a_second_survives_for_timings() {
+        let at = unix_of("2026-11-13T19:20:02.761786+00:00").unwrap();
+        let whole = utc_seconds("2026-11-13T19:20:02+00:00").unwrap() as f64;
+        assert!((at - whole - 0.761786).abs() < 1e-6);
+        assert_eq!(unix_of("2026-11-13T19:20:02Z"), Some(whole));
+    }
+
+    #[test]
+    fn a_timing_clock_is_thai_and_shows_tenths() {
+        let at = unix_of("2026-11-13T19:20:02.761Z").unwrap();
+        assert_eq!(clock_tenths(at), "02:20:02.7");
+    }
 
     #[test]
     fn a_utc_timestamp_comes_out_seven_hours_later() {

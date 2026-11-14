@@ -188,6 +188,15 @@ pub struct Exit {
     pub broker_order_id: String,
     #[serde(default)]
     pub simulated: bool,
+    /// When the close left for the exchange and how long the answer took.
+    /// Empty on rows written before the bot timed its sends.
+    #[serde(default)]
+    pub sent_at: String,
+    #[serde(default)]
+    pub answered_ms: Option<f64>,
+    /// The id the exchange filed the close under.
+    #[serde(default)]
+    pub venue_id: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -232,6 +241,12 @@ pub struct Order {
     pub limit_price: String,
     #[serde(default)]
     pub risk_amount: String,
+    /// When the order left for the exchange and how long the answer took -
+    /// also when the answer was a refusal.
+    #[serde(default)]
+    pub sent_at: String,
+    #[serde(default)]
+    pub answered_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -240,6 +255,11 @@ pub struct Receipt {
     pub broker_order_id: String,
     #[serde(default)]
     pub simulated: bool,
+    /// The id the exchange files the order under (GRVT: a uint32 made from
+    /// `client_order_id`), which is how the board finds it in the exchange's
+    /// own order history.
+    #[serde(default)]
+    pub venue_id: String,
 }
 
 // ------------------------------------------------------------- translations
