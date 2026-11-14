@@ -4,16 +4,25 @@
 #   .\board\pack.ps1          # ก่อน: build ชุดบอร์ด (exe + หน้าเว็บ)
 #   .\tools\student-kit.ps1   # แล้ว: รวมเป็นชุดนักเรียน
 #
-# ได้ board\pack\student-kit.zip ข้างในเป็นโฟลเดอร์ trade-bot\ ที่มี
-#   โค้ดบอททั้งหมด         จาก git (ของที่ commit แล้วเท่านั้น: ไม่มี logs\ ไม่มี .env ไม่มี .venv)
-#   board-pack\            บอร์ดพกพา วางตรงตำแหน่งที่ start.ps1 ของมันหาไฟล์บอทเจอ
-#   00-START-HERE.txt          สามคำสั่งแรก
+# ได้ board\pack\student-kit.zip ข้างในมีสองโฟลเดอร์
+#   trade-bot\                  โค้ดบอททั้งหมดจาก git (ของที่ commit แล้วเท่านั้น: ไม่มี logs\ .env .venv)
+#     board-pack\               บอร์ดพกพา วางตรงตำแหน่งที่ start.ps1 ของมันหาไฟล์บอทเจอ
+#     00-START-HERE.txt         คำสั่งแรกๆ
+#   bot-trade-studio\           ปลั๊กอิน /bot:* (จาก git ของ ..ot-trade-studio) ติดตั้งจากโฟลเดอร์ได้
+#                               ไม่ต้องพึ่ง marketplace บน GitHub
 #
 # ทำไมต้องมี: แม่แบบบน GitHub ที่คู่มือให้ clone ยังเป็นรุ่นก่อนมีบอร์ด
 # จนกว่าจะ push งานล่าสุดขึ้นไป zip นี้คือทางเดียวที่นักเรียนจะได้รุ่นเดียวกับที่ผู้สอนใช้
 #
 # ตรวจก่อนบีบทุกครั้ง: ถ้าเจอไฟล์ .env, โฟลเดอร์ logs หรือ config.yaml ในชุด จะหยุดทันที
-param([string]$Ref = "HEAD")
+param(
+    [string]$Ref = "HEAD",
+    # The plugin repo, beside this one in the teacher's workspace. Missing is
+    # not fatal: the kit still works, students just install the plugin the
+    # usual way.
+    [string]$Plugin = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "bot-trade-studio"),
+    [string]$PluginRef = "HEAD"
+)
 
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
@@ -36,6 +45,16 @@ $bot = Join-Path $work "trade-bot"
 Expand-Archive -Path $src -DestinationPath $bot -ErrorAction Stop
 Remove-Item -Force $src -ErrorAction Stop
 
+if (Test-Path (Join-Path $Plugin ".claude-plugin\marketplace.json")) {
+    Write-Host "    + ปลั๊กอินจาก $Plugin ($PluginRef)" -ForegroundColor Cyan
+    git -C $Plugin archive --format=zip -o $src $PluginRef
+    if ($LASTEXITCODE -ne 0) { throw "git archive ของปลั๊กอินไม่ผ่าน" }
+    Expand-Archive -Path $src -DestinationPath (Join-Path $work "bot-trade-studio") -ErrorAction Stop
+    Remove-Item -Force $src -ErrorAction Stop
+} else {
+    Write-Host "    ไม่เจอปลั๊กอินที่ $Plugin - ชุดนี้จะไม่มีปลั๊กอิน" -ForegroundColor Yellow
+}
+
 Write-Host "2/3 วางบอร์ดพกพา..." -ForegroundColor Cyan
 Copy-Item -Recurse $pack (Join-Path $bot "board-pack") -ErrorAction Stop
 
@@ -46,6 +65,11 @@ $readme = @'
     python -m venv .venv
     .venv\Scripts\python.exe -m pip install -e ".[dev]"
     .venv\Scripts\python.exe -m pytest -q          # ต้องผ่านก่อนทำอย่างอื่น
+
+ติดตั้งปลั๊กอิน /bot:* จากชุดนี้ (ถ้ามีโฟลเดอร์ bot-trade-studio อยู่ข้างๆ trade-bot):
+    เปิด Claude Code ในโฟลเดอร์ trade-bot แล้วพิมพ์ทีละบรรทัด
+    /plugin marketplace add <พาธเต็มของโฟลเดอร์ bot-trade-studio>
+    /plugin install bot@bot-trade-studio-marketplace
 
 ลองของโดยไม่ต้องมีกุญแจ:
     .venv\Scripts\tradebot.exe --dry-run --paper-live --config config\demo.yaml --iterations 36
@@ -61,14 +85,14 @@ $utf8bom = New-Object System.Text.UTF8Encoding($true)
 [System.IO.File]::WriteAllText((Join-Path $bot "00-START-HERE.txt"), $readme, $utf8bom)
 
 Write-Host "3/3 ตรวจว่าไม่มีความลับติดไปแล้วบีบ..." -ForegroundColor Cyan
-$bad = Get-ChildItem -Recurse -Force $bot | Where-Object {
+$bad = Get-ChildItem -Recurse -Force $work | Where-Object {
     $_.Name -like ".env*" -or $_.Name -eq "config.yaml" -or ($_.PSIsContainer -and $_.Name -eq "logs")
 }
 if ($bad) {
     $bad | ForEach-Object { Write-Host "  เจอ: $($_.FullName)" -ForegroundColor Red }
     throw "หยุด: มีไฟล์ที่ไม่ควรแจกอยู่ในชุด"
 }
-Compress-Archive -Path $bot -DestinationPath $zip -ErrorAction Stop
+Compress-Archive -Path (Join-Path $work "*") -DestinationPath $zip -ErrorAction Stop
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host ""
 Write-Host "เสร็จ: $zip ($size MB)" -ForegroundColor Green

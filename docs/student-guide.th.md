@@ -75,7 +75,7 @@ tradebot --dry-run --paper-live --config config/demo.yaml --iterations 36
 ### คำถามชวนคิด
 
 - ทำไมบรรทัดส่วนใหญ่ถึง "ไม่ทำอะไร" และนั่นเป็นเรื่องดีหรือไม่ดี
-- ขนาดไม้ `0.145` มาจากไหน (คำใบ้: ความเสี่ยงต่อไม้ ÷ ระยะ stop)
+- ขนาดไม้ `0.145` มาจากไหน (คำใบ้: ความเสี่ยงต่อไม้ ÷ (ระยะ stop + ค่าธรรมเนียมสองขาต่อหน่วย) — ดูใบงานข้อ 2)
 - ไม้ที่ขาดทุน ขาดเพราะราคา หรือเพราะค่าธรรมเนียม
 
 ---
@@ -331,6 +331,8 @@ tradebot --live --config config/testnet.yaml --iterations 24 --close-at-end
   ให้แจก **ชุดนักเรียน** แทนการ `gh repo create --template`:
   `board\pack.ps1` แล้ว `tools\student-kit.ps1` → `board\pack\student-kit.zip`
   (โค้ดบอท + บอร์ดพกพา + `00-START-HERE.txt` สคริปต์ตรวจแล้วว่าไม่มี `.env` / `logs` ติดไป)
+  ในชุดมีโฟลเดอร์ `bot-trade-studio` (ปลั๊กอินรุ่นในเครื่องผู้สอน) ด้วย นักเรียนติดตั้งจากโฟลเดอร์ได้
+  `/plugin marketplace add <พาธเต็มของ bot-trade-studio>` แล้ว `/plugin install bot@bot-trade-studio-marketplace`
 - ใบงานสำหรับคาบ: `docs/student-lab.th.md`
 - เปิด `#trip` ตอนรันขั้น 6 หน้าห้อง: เห็นออเดอร์เดินทางจนจับคู่ภายในไม่กี่ร้อย ms
 - ประโยคที่ควรพูดซ้ำ: **"บอทที่ดีส่วนใหญ่ไม่ทำอะไร"** และ **"ping_pong ไม่ใช่กลยุทธ์"**
