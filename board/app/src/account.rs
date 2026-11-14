@@ -36,7 +36,9 @@ use crate::exchange::{clock, Num};
 const EVERY: [f64; 7] = [3.0, 3.0, 4.0, 20.0, 20.0, 30.0, 60.0];
 
 /// How often the order lists are asked for while an order is on its way.
-const HURRY: f64 = 2.0;
+/// Three small requests a second, for the second or two an order travels;
+/// the board learning of a fill late is what this exists to shorten.
+const HURRY: f64 = 1.0;
 
 /// How many rows of each history. Enough to fill a card and scroll a little.
 const ROWS: u32 = 40;
