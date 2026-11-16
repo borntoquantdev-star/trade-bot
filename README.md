@@ -172,7 +172,7 @@ trading:
 risk:
   risk_per_trade_pct: 1.0    # of equity, lost if the stop is hit
   max_positions: 1
-  max_daily_loss_pct: 3.0    # equity drop since 00:00 UTC that halts the bot
+  max_daily_loss_pct: 3.0    # equity drop since 00:00 Thai time that halts the bot
   max_drawdown_pct: 10.0     # drop from peak equity that halts the bot
   max_leverage: 5            # exposure ceiling = equity x this
   max_slippage_pct: 0.1      # also becomes the limit price on every order

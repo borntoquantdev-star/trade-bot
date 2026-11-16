@@ -110,8 +110,8 @@ and the ids of orders already sent. Without it, a restart would reset the
 daily loss limit — precisely when you least want it reset — and would forget
 which orders had gone out.
 
-The daily loss is measured as **equity change since the first tick of the UTC
-day**, not as a sum of closed trades. That catches open-position moves and
+The daily loss is measured as **equity change since the first tick of the Thai
+day** (midnight in Bangkok, UTC+7; `risk.trading_day`), not as a sum of closed trades. That catches open-position moves and
 anything done by hand in the exchange UI, at the cost of being a blunter
 instrument than realised P&L.
 

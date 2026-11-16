@@ -33,7 +33,7 @@ from typing import Any
 
 from ..brokers.base import Broker, BrokerError, OrderReceipt
 from ..money import ZERO, D
-from ..risk import Decision, explain, risk_gate
+from ..risk import Decision, explain, risk_gate, trading_day
 from ..strategies.base import MarketView, Strategy
 from ..trace import Trace
 from ..types import PortfolioState, Position, Reject, RejectCode, Signal, SizedOrder
@@ -505,8 +505,8 @@ class Engine:
         self.state.save(self.state_path)
 
     def _roll_day(self, now: datetime, equity: Decimal) -> None:
-        """Start a new daily loss budget at each UTC midnight."""
-        today = now.astimezone(timezone.utc).date().isoformat()
+        """Start a new daily loss budget at each midnight, Thai time."""
+        today = trading_day(now)
         if self.state.day != today:
             self.state.day = today
             self.state.day_start_equity = equity

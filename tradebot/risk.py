@@ -17,7 +17,7 @@ Contract - do not break it without discussing first:
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from .money import ONE, ZERO
@@ -318,4 +318,25 @@ __all__ = [
     "explain",
     "risk_gate",
     "show",
+    "TRADING_DAY_TZ",
+    "trading_day",
 ]
+
+
+#: Where the daily loss budget's day begins: midnight in Bangkok.  A UTC day
+#: would reset the budget at seven in the morning, so a bad evening and the
+#: small hours after it shared one budget while "today" on the board did not.
+#: Thailand has no daylight saving, so a fixed offset is exact all year and
+#: needs no tz database (which a bare Windows Python does not ship).
+TRADING_DAY_TZ = timezone(timedelta(hours=7), "Asia/Bangkok")
+
+
+def trading_day(now: datetime) -> str:
+    """The trading day ``now`` falls in, as ``YYYY-MM-DD`` in Thai time.
+
+    The live engine and the backtester both roll the daily budget on this, so
+    a backtest's daily stop trips on the same boundary the live bot's does.
+    """
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware (use UTC)")
+    return now.astimezone(TRADING_DAY_TZ).date().isoformat()

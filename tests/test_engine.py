@@ -257,7 +257,7 @@ def test_the_audit_trail_records_decisions(tmp_path):
     assert all("at" in row and "price" in row for row in lines)
 
 
-def test_a_new_utc_day_resets_the_daily_budget(tmp_path):
+def test_a_new_day_resets_the_daily_budget(tmp_path):
     engine, broker, ticks = make_engine(tmp_path)
     engine.tick()
     assert engine.state.day == "2026-11-04"
@@ -265,6 +265,22 @@ def test_a_new_utc_day_resets_the_daily_budget(tmp_path):
     ticks["now"] = START + timedelta(days=1)
     engine.tick()
     assert engine.state.day == "2026-11-05"
+    assert engine.state.day_start_equity == D("9500")
+
+
+def test_the_daily_budget_resets_at_midnight_thai_time_not_utc(tmp_path):
+    engine, broker, ticks = make_engine(tmp_path)
+    ticks["now"] = datetime(2026, 11, 4, 16, 59, tzinfo=timezone.utc)  # 23:59 in Bangkok
+    engine.tick()
+    assert engine.state.day == "2026-11-04"
+    broker._equity = D("9500")
+    ticks["now"] = datetime(2026, 11, 4, 17, 0, tzinfo=timezone.utc)  # 00:00 in Bangkok
+    engine.tick()
+    assert engine.state.day == "2026-11-05"
+    assert engine.state.day_start_equity == D("9500")
+    broker._equity = D("9400")
+    ticks["now"] = datetime(2026, 11, 5, 0, 30, tzinfo=timezone.utc)  # 07:30, old reset time
+    engine.tick()
     assert engine.state.day_start_equity == D("9500")
 
 

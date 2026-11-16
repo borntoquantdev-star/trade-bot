@@ -35,13 +35,13 @@ import logging
 from collections import Counter, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from ..core.config import BotConfig
 from ..intervals import interval_delta
 from ..money import ZERO
-from ..risk import risk_gate
+from ..risk import risk_gate, trading_day
 from ..strategies.base import MarketView, Strategy
 from ..types import Candle, PortfolioState, Position, Reject, RejectCode, Side, Signal, SizedOrder
 from .result import BacktestResult, EquityPoint, Trade
@@ -283,7 +283,7 @@ def run_backtest(
         # 3. Mark the account to market.
         equity = cash + (held.unrealized(bar.close) if held else ZERO)
         peak_equity = max(peak_equity, equity)
-        today = now.astimezone(timezone.utc).date().isoformat()
+        today = trading_day(now)
         if day != today:
             day = today
             day_start_equity = equity

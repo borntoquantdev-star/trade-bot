@@ -1584,10 +1584,10 @@ impl Board {
         } else if account.day.is_empty() {
             "มีข้อมูล".to_string()
         } else {
-            // The bot's trading day, which is a UTC day: its loss limit
-            // resets at midnight UTC, seven in the morning in Bangkok. Said
-            // on the chip because "today" on this card and "today" on the
-            // calendar are different days for seven hours of every day.
+            // The bot's trading day: its loss limit resets at midnight in
+            // Bangkok, the same day the calendar uses. Said on the chip so a
+            // bot still running on yesterday's budget (no tick since
+            // midnight) is visible rather than assumed.
             format!("วันของบอท {}", account.day)
         };
         let (state, status) = stale_if_failed(&load, state, status);
@@ -1663,7 +1663,7 @@ impl Board {
                 }
                 card::kv(
                     ui,
-                    &format!("กำไรขาดทุนวันนี้ (นับจาก {:02}:00)", crate::time::OFFSET_HOURS),
+                    "กำไรขาดทุนวันนี้ (นับจากเที่ยงคืน)",
                     &format!(
                         "{} ({})",
                         bot::signed(account.day_pnl),

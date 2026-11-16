@@ -380,3 +380,19 @@ def test_a_round_number_keeps_no_decimal_tail():
 
 def test_a_tiny_amount_is_never_shown_as_zero():
     assert show(D("0.00001")) != "0"
+
+
+def test_the_trading_day_is_the_date_in_bangkok():
+    from tradebot.risk import trading_day
+
+    assert trading_day(datetime(2026, 11, 4, 16, 59, 59, tzinfo=timezone.utc)) == "2026-11-04"
+    assert trading_day(datetime(2026, 11, 4, 17, 0, tzinfo=timezone.utc)) == "2026-11-05"
+    bangkok = timezone(timedelta(hours=7))
+    assert trading_day(datetime(2026, 11, 5, 0, 0, tzinfo=bangkok)) == "2026-11-05"
+
+
+def test_the_trading_day_refuses_a_naive_time():
+    from tradebot.risk import trading_day
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        trading_day(datetime(2026, 11, 4, 12, 0))

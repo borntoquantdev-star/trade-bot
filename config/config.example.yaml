@@ -61,7 +61,7 @@ risk:
   # เขียนเป็นเปอร์เซ็นต์แบบที่คนพูดกัน (1.0 คือ 1%)
   risk_per_trade_pct: 1.0    # เสียเท่านี้ของพอร์ตถ้าโดน stop
   max_positions: 1
-  max_daily_loss_pct: 3.0    # พอร์ตลดจากต้นวัน (UTC) เท่านี้ → หยุดบอท
+  max_daily_loss_pct: 3.0    # พอร์ตลดจากต้นวัน (เที่ยงคืนเวลาไทย) เท่านี้ → หยุดบอท
   max_drawdown_pct: 10.0     # พอร์ตลดจากจุดสูงสุดเท่านี้ → หยุดบอท
   max_leverage: 5            # เพดาน exposure = ทุน × ค่านี้
   max_slippage_pct: 0.1      # และกลายเป็น limit price ของทุกออเดอร์
