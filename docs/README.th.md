@@ -199,7 +199,7 @@ tradebot --live
 | `tradebot --live` | ยิงออเดอร์จริง (ถ้า `network: mainnet` บังคับต้องมีแฟล็กนี้) |
 | `tradebot --doctor` | ตรวจ config, การเชื่อมต่อ, ราคา, สเปคสินค้า, ยอดเงิน, แท่งเทียน |
 | `tradebot --list-strategies` | ดูกลยุทธ์ที่ลงทะเบียนไว้ |
-| `tradebot --resume` | ปลดล็อกสถานะ halt ที่ risk gate เขียนไว้ |
+| `tradebot --resume` | ปลดล็อกสถานะ halt ที่ risk gate เขียนไว้ (ของ paper · ถ้าเป็นของ exchange ใช้ `--live --resume`) |
 | `tradebot --close --yes` | ปิด position ของ symbol ที่ตั้งไว้ |
 | `tradebot --iterations N` | หยุดหลังวน N รอบ |
 | `tradebot --iterations N --close-at-end` | หยุดหลังวน N รอบ **แล้วปิดไม้ที่ค้างอยู่** รอบสาธิตจะได้ไม่ทิ้งไม้ไว้ข้ามคืน |
@@ -241,7 +241,7 @@ qty = งบเสี่ยง / (ระยะstop + (ราคาเข้า +
 
 แล้วปัด qty **ลง** ตาม lot step เสมอ การปัดจึงทำให้เสี่ยงน้อยกว่างบได้เท่านั้น ไม่มีทางเกิน — มีเทสชื่อ `test_risk_amount_never_exceeds_the_budget` ไล่หลายระยะ stop ยืนยันไว้
 
-พอชน `max_daily_loss_pct` หรือ `max_drawdown_pct` บอทจะ **halt** ตัวเอง เขียนเหตุผลลง `logs/state.json` แล้วหยุด — สถานะนี้อยู่ข้ามการรีสตาร์ตโดยเจตนา ปลดได้ด้วย `--resume` เท่านั้น
+พอชน `max_daily_loss_pct` หรือ `max_drawdown_pct` บอทจะ **halt** ตัวเอง เขียนเหตุผลลง `logs/state.json` (โหมด paper แยกไว้ที่ `logs/state.paper.json` ไม่ปนกับบัญชีจริง) แล้วหยุด — สถานะนี้อยู่ข้ามการรีสตาร์ตโดยเจตนา ปลดได้ด้วย `--resume` เท่านั้น
 
 ## เรื่องเฉพาะของ Hyperliquid ที่บอทจัดการให้แล้ว
 

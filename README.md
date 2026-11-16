@@ -225,9 +225,9 @@ it the bot refuses to start and sends nothing.
 | `tradebot --live` | Send real orders. Required when `network: mainnet`. |
 | `tradebot --doctor` | Check config, connection, price, instrument, account, candles. |
 | `tradebot --list-strategies` | What is registered. |
-| `tradebot --fetch-candles --days 365` | Download price history into `data/candles`. |
+| `tradebot --live --fetch-candles --days 365` | Download price history into `data/candles`. Without `--live` the paper broker answers and its invented bars go under `data/candles/paper`. |
 | `tradebot --backtest --days 365 --trades` | Replay it through the risk gate. Offline. |
-| `tradebot --resume` | Clear a halt the risk gate wrote. |
+| `tradebot --resume` | Clear a halt the risk gate wrote: the paper broker's; `--live --resume` for an exchange's. |
 | `tradebot --close --yes` | Flatten the configured symbol. |
 | `tradebot --iterations N` | Stop after N loops. |
 | `tradebot --iterations N --close-at-end` | Stop after N loops and close any open position, so a demo run never leaves one behind. |
@@ -275,8 +275,9 @@ smaller than the budget allows. A test asserts that invariant across a range
 of stop distances.
 
 Hitting the daily loss or drawdown limit **halts** the bot: it writes the
-reason to `logs/state.json` and stops. That survives a restart on purpose, and
-only `--resume` clears it.
+reason to `logs/state.json` (`logs/state.paper.json` for the paper broker, which
+keeps its own budget) and stops. That survives a restart on purpose, and only
+`--resume` clears it - with `--live` for an exchange's halt.
 
 ## Hyperliquid specifics the bot handles for you
 

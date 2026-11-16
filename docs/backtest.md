@@ -4,11 +4,16 @@ Two commands. The first downloads price history once; the second replays it
 through the same `risk_gate()` the live bot calls.
 
 ```bash
-tradebot --fetch-candles --days 365      # writes data/candles/...
+tradebot --live --fetch-candles --days 365   # writes data/candles/...
 tradebot --backtest --days 365 --trades  # reads it back, offline
 ```
 
 `--backtest` never opens a connection. It needs no credentials and no SDK.
+
+`--fetch-candles` needs `--live` to reach the exchange (it only reads; it cannot
+place an order). Without it the paper broker answers with one invented price,
+and those bars are stored under `data/candles/paper/`, where a backtest never
+looks - a backtest on them would simply never trade.
 
 ## Where the bars live
 
@@ -26,8 +31,8 @@ byte for byte identical. A download that dies halfway has already written the
 pages that arrived, so running it again resumes instead of starting over.
 
 ```bash
-tradebot --fetch-candles --since 2024-01-01   # a date instead of a day count
-tradebot --fetch-candles --refresh            # re-ask for bars already stored
+tradebot --live --fetch-candles --since 2024-01-01   # a date instead of a day count
+tradebot --live --fetch-candles --refresh            # re-ask for bars already stored
 ```
 
 The bar that is still forming is always dropped. Its high, low and close are

@@ -22,6 +22,29 @@ use serde_json::{json, Map, Value};
 
 use crate::Config;
 
+/// The state file of the bot that ran last.
+///
+/// The paper broker keeps its own (`state.paper.json`) so a dry run never
+/// touches an account's daily budget. The board shows whichever was written
+/// most recently: during a dry run that is the simulator's state and the
+/// simulator's code, during a testnet run the account's. With only one of
+/// them on disk, that one; with neither, `state.json`, so the "not yet"
+/// message names the file a first real run will write.
+pub fn state_path(logs: &std::path::Path) -> std::path::PathBuf {
+    let written = |name: &str| {
+        let path = logs.join(name);
+        let when = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok()?;
+        Some((when, path))
+    };
+    match (written("state.json"), written("state.paper.json")) {
+        (Some(live), Some(paper)) if paper.0 > live.0 => paper.1,
+        (None, Some(paper)) => paper.1,
+        _ => logs.join("state.json"),
+    }
+}
+
 /// How many equity points survive. Two per bucket (the low and the high), so
 /// this is the cap, not the count - about 600 points draws a curve that is
 /// indistinguishable from the full one at any size a card can be.
@@ -175,6 +198,34 @@ pub fn thin(points: Vec<Value>, cap: usize) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_board_reads_the_state_file_of_the_bot_that_ran_last() {
+        let logs = std::env::temp_dir().join(format!("board-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&logs);
+        std::fs::create_dir_all(&logs).unwrap();
+        assert_eq!(state_path(&logs), logs.join("state.json"), "ยังไม่มีไฟล์ไหนเลย");
+
+        std::fs::write(logs.join("state.paper.json"), "{}").unwrap();
+        assert_eq!(
+            state_path(&logs),
+            logs.join("state.paper.json"),
+            "มีแต่ของ paper"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(logs.join("state.json"), "{}").unwrap();
+        assert_eq!(state_path(&logs), logs.join("state.json"), "testnet รันทีหลัง");
+
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(logs.join("state.paper.json"), "{}").unwrap();
+        assert_eq!(
+            state_path(&logs),
+            logs.join("state.paper.json"),
+            "paper รันทีหลัง"
+        );
+        let _ = std::fs::remove_dir_all(&logs);
+    }
 
     fn point(at: &str, equity: &str) -> Value {
         json!({ "at": at, "equity": equity })

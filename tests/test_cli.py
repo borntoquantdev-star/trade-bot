@@ -316,7 +316,27 @@ def test_a_paper_fetch_says_how_to_get_real_history_with_this_config(tmp_path, c
     assert main(argv + paths(tmp_path)) == 0
     out = capsys.readouterr().out
     assert f"tradebot --config {path} --live --fetch-candles --days 1" in out
-    assert f"next: tradebot --config {path} --backtest --days 1" in out
+    # Shelved apart, so a backtest of the real exchange cannot read them.
+    assert list((data / "paper").rglob("*.csv")), "แท่งปลอมต้องอยู่ใต้ paper"
+    assert not (data / "grvt").exists(), "แท่งปลอมห้ามไปอยู่ใต้ชื่อ grvt"
+    assert "--backtest" not in out.split("next:")[-1]
+
+
+def test_a_dry_run_keeps_its_own_state_file(tmp_path, config_file, monkeypatch):
+    # One shared file let a paper run open the day at the simulator's
+    # 10000 and halt the testnet account on a loss it never made (16 Nov).
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "logs").mkdir()
+    live = tmp_path / "logs" / "state.json"
+    live.write_text('{"halted": true, "halt_reason": "real one"}', encoding="utf-8")
+    argv = ["--config", config_file(TESTNET_CONFIG), "--dry-run", "--iterations", "1"]
+    assert main(argv + ["--audit-file", str(tmp_path / "audit.jsonl")]) == 0
+    assert (tmp_path / "logs" / "state.paper.json").exists()
+    assert "real one" in live.read_text(encoding="utf-8"), "paper ห้ามแตะไฟล์ของบัญชีจริง"
+
+    # And --resume without --live clears the paper halt, not the account's.
+    assert main(["--config", config_file(TESTNET_CONFIG), "--resume"]) == 0
+    assert '"halted": true' in live.read_text(encoding="utf-8")
 
 
 def test_a_backtest_with_no_candles_says_to_fetch_with_live(tmp_path, config_file, capsys):

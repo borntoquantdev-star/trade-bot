@@ -42,7 +42,7 @@ one that applies.
 
 | code | what it means | what to do |
 |---|---|---|
-| `halted` | The bot stopped itself and wrote the reason to `logs/state.json`. | Read `halt_reason`. Understand it, then `tradebot --resume`. Never resume without reading it. |
+| `halted` | The bot stopped itself and wrote the reason to `logs/state.json` (`logs/state.paper.json` on the paper broker). | Read `halt_reason`. Understand it, then `tradebot --resume` (`--live --resume` for an exchange). Never resume without reading it. |
 | `max_drawdown` | Equity fell `risk.max_drawdown_pct` below its peak. | This is the kill switch. Stop and review the strategy; do not raise the limit to keep trading. |
 | `daily_loss_limit` | Equity dropped more than `risk.max_daily_loss_pct` since 00:00 Thai time (UTC+7). | Resets at the next midnight in Bangkok. Note that it measures *all* equity change, including trades made by hand. |
 | `expired` | The signal was older than its `valid_for` when it reached the gate. | Usually a slow loop or a long broker call. Check `loop_interval` and the logs for retries. |

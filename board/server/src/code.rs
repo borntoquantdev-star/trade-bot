@@ -123,7 +123,7 @@ pub async fn stages(State(config): State<Config>) -> Json<Value> {
     // config file in every case where the two disagree, because one of them
     // is a statement about a running process and the other is a file that
     // process may never have been shown.
-    let running = tokio::fs::read_to_string(config.logs.join("state.json"))
+    let running = tokio::fs::read_to_string(crate::bot::state_path(&config.logs))
         .await
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())

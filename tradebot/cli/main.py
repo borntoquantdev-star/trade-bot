@@ -6,13 +6,18 @@
     tradebot --fetch-candles           download price history into data/candles
     tradebot --backtest                replay that history, offline
     tradebot --live                    real orders (prod requires this flag)
-    tradebot --resume                  clear a halt written by the risk gate
+    tradebot --resume                  clear a paper halt (add --live for an exchange's)
     tradebot --close --yes             flatten the configured symbol
 
 ``--backtest`` never opens a connection: it reads the stored candles and runs
 them through the same risk gate the live engine uses.  ``--fetch-candles``
-does connect, but only to read - it cannot place an order, so it does not need
-``--live``.
+connects only to read - it cannot place an order - but it still needs
+``--live`` to reach the exchange: without it the paper broker answers, and
+its invented candles are stored under ``paper``, apart from the real ones.
+
+The paper broker and an exchange keep separate state files (``LIVE_STATE``,
+``PAPER_STATE``), so a dry run can never spend or reset an account's daily
+budget.  ``--resume`` clears the halt of whichever one the same flags select.
 
 ``--dry-run`` is the default when ``hyperliquid.network`` is ``testnet`` and no ``--live``
 flag is given, so the accident path leads to the paper broker rather than to
@@ -44,6 +49,16 @@ from ..utils.logger import setup_logger
 
 DEFAULT_CONFIG = "config/config.yaml"
 
+# The paper broker keeps its own daily budget and halt flag. Sharing one
+# file, a paper run on 16 Nov opened the Thai day at the simulator's 10000
+# and the testnet account then counted its 9789 as a 210 loss it never made,
+# and halted. Each broker answers only for its own money.
+LIVE_STATE = "logs/state.json"
+PAPER_STATE = "logs/state.paper.json"
+
+# Where invented candles go, instead of under an exchange's name.
+PAPER_SHELF = "paper"
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -64,8 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--state-file",
-        default="logs/state.json",
-        help="where the daily budget and halt flag live",
+        default=None,
+        help=f"where the daily budget and halt flag live (default: {LIVE_STATE} "
+        f"for an exchange, {PAPER_STATE} for the paper broker)",
     )
     parser.add_argument(
         "--audit-file", default="logs/audit.jsonl", help="one JSON line per decision"
@@ -280,7 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         broker=broker,
         strategy=strategy,
         logger=log,
-        state_path=Path(args.state_file) if args.state_file else None,
+        state_path=Path(args.state_file or (PAPER_STATE if paper else LIVE_STATE)),
         audit_path=Path(args.audit_file) if args.audit_file else None,
         trace=args.trace,
         trace_path=Path(args.trace_file) if args.trace_file else None,
@@ -399,12 +415,19 @@ def _fetch_candles(
     symbol = config.trading.symbol
     interval = config.trading.timeframe
 
+    # Invented candles are shelved under "paper", never under the exchange's
+    # name. Stored as "grvt" they were indistinguishable from the real thing,
+    # and a backtest on one flat price simply never traded (16 Nov).
+    shelf = PAPER_SHELF if paper else config.exchange
+    real = _command(args, f"--live --fetch-candles --days {args.days}")
     if paper:
         log.warning(
             "the paper broker invents its candles (one flat price). They exercise "
-            "the download path and tell you NOTHING about the market, and a "
-            "backtest on them never trades. For real history: %s",
-            _command(args, f"--live --fetch-candles --days {args.days}"),
+            "the download path and tell you NOTHING about the market, so they are "
+            "kept apart, under '%s', where a backtest will not read them. "
+            "For real history: %s",
+            PAPER_SHELF,
+            real,
         )
 
     try:
@@ -429,7 +452,7 @@ def _fetch_candles(
             interval,
             start,
             end,
-            exchange=config.exchange,
+            exchange=shelf,
             log=log,
             refresh=args.refresh,
             on_page=lambda r: log.info("  %s bars so far", r.fetched),
@@ -439,13 +462,16 @@ def _fetch_candles(
         return 2
 
     log.info("%s", report.describe())
-    log.info("stored at %s", store.path_for(config.exchange, symbol, interval))
+    log.info("stored at %s", store.path_for(shelf, symbol, interval))
     if report.gaps:
         log.warning(
             "the history has holes. A backtest will skip them rather than "
             "invent prices, but the result covers less time than it looks."
         )
-    log.info("next: %s", _command(args, f"--backtest --days {args.days}"))
+    if paper:
+        log.info("next: real history first: %s", real)
+    else:
+        log.info("next: %s", _command(args, f"--backtest --days {args.days}"))
     return 0
 
 
@@ -576,7 +602,11 @@ def _doctor(
     else:
         log.warning("candles      this broker has no candle feed")
     if engine.state.halted:
-        log.error("state        HALTED: %s (clear it with --resume)", engine.state.halt_reason)
+        log.error(
+            "state        HALTED: %s (clear it with %s)",
+            engine.state.halt_reason,
+            "--resume" if paper else "--live --resume",
+        )
         problems += 1
     else:
         log.info(

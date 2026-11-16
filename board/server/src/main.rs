@@ -184,7 +184,7 @@ async fn read_json(path: &Path) -> Json<serde_json::Value> {
 }
 
 async fn state(State(config): State<Config>) -> Json<serde_json::Value> {
-    read_json(&config.logs.join("state.json")).await
+    read_json(&bot::state_path(&config.logs)).await
 }
 
 /// The audit trail is JSON Lines, newest last. Only the tail is sent: the

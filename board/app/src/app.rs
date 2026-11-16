@@ -1526,10 +1526,12 @@ impl Board {
                 if let Some(reason) = &missing {
                     ui.label(egui::RichText::new(reason).size(11.5).color(theme::MUTED));
                     ui.label(
-                        egui::RichText::new("tradebot --fetch-candles --days 90")
-                            .size(11.0)
-                            .monospace()
-                            .color(theme::ACCENT),
+                        egui::RichText::new(
+                            "tradebot --config config/testnet.yaml --live --fetch-candles --days 1",
+                        )
+                        .size(11.0)
+                        .monospace()
+                        .color(theme::ACCENT),
                     );
                     ui.add_space(6.0);
                 }

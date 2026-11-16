@@ -121,7 +121,7 @@ pub async fn candles(
             "present": false,
             "reason": format!("ยังไม่มี {}", path.display()),
             "fix": format!(
-                "tradebot --fetch-candles --days 90   (แล้วแท่งจะไปอยู่ที่ {})",
+                "tradebot --config config/testnet.yaml --live --fetch-candles --days 1   (แล้วแท่งจะไปอยู่ที่ {})",
                 path.display()
             ),
         }));
