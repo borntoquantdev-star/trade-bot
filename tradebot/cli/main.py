@@ -6,7 +6,9 @@
     tradebot --fetch-candles           download price history into data/candles
     tradebot --backtest                replay that history, offline
     tradebot --check                   is the strategy fit for testnet? (0 = pass)
-    tradebot --live                    real orders (prod requires this flag)
+    tradebot --live                    real orders (prod requires this flag);
+                                       only after --check passed on this file
+                                       and this market
     tradebot --resume                  clear a paper halt (add --live for an exchange's)
     tradebot --close --yes             flatten the configured symbol
 
@@ -47,6 +49,7 @@ from ..data.store import DEFAULT_ROOT, CandleStore
 from ..money import D
 from ..strategies import UnknownStrategy, build_strategy, describe_strategies
 from ..utils.logger import setup_logger
+from .check import clearance as check_clearance
 from .check import run_check
 from .check import write as write_check
 
@@ -123,7 +126,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--live",
         action="store_true",
-        help="send real orders; required on grvt prod or hyperliquid mainnet",
+        help="send real orders; required on grvt prod or hyperliquid mainnet. "
+        "A trading run needs a passed --check of this strategy file on this market",
     )
     mode.add_argument("--paper-price", default="100000", help="starting price for the paper broker")
     mode.add_argument(
@@ -290,6 +294,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run and args.live:
         log.error("--dry-run and --live contradict each other; pick one")
         return 2
+    # Only a run that lets the strategy send orders is gated. Reading
+    # candles, the doctor, a halt reset and flattening never ask it anything.
+    trades = not (args.fetch_candles or args.doctor or args.resume or args.close)
+    if not paper and trades:
+        refusal = _cleared(config, args, log)
+        if refusal is not None:
+            return refusal
 
     log.info("configuration:\n%s", describe(config))
     log.info(
@@ -535,6 +546,25 @@ def _check(config: BotConfig, args: argparse.Namespace, log: logging.Logger) -> 
     print()
     print(f"report: {write_check(report, folder)}")
     return 0 if report.passed else 1
+
+
+def _cleared(config: BotConfig, args: argparse.Namespace, log: logging.Logger) -> int | None:
+    """None if this strategy may trade live; otherwise the exit code, refusal logged."""
+    name = args.strategy or config.trading.strategy
+    try:
+        cls = type(build_strategy(name, config, log))
+    except UnknownStrategy as exc:
+        log.error("%s", exc)
+        return 2
+    folder = Path(args.log_file).parent if args.log_file else Path("logs")
+    why = check_clearance(name, cls, config, folder)
+    if why is None:
+        log.info("--check: '%s' passed on this file and this market", name)
+        return None
+    log.error("not sent: %s. Nothing was sent to %s.", why, config.exchange)
+    log.error("  run the check first (offline, seconds): %s", _command(args, "--check"))
+    log.error("  it must say VERDICT  PASS; then this same command will start.")
+    return 2
 
 
 def _command(args: argparse.Namespace, rest: str) -> str:

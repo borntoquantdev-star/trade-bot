@@ -255,3 +255,117 @@ def test_the_command_prints_the_verdict_and_keeps_a_report(tmp_path, capsys):
     saved = json.loads((tmp_path / "logs" / "check-ping_pong.json").read_text(encoding="utf-8"))
     assert saved["passed"] is True
     assert saved["fingerprint"] in out
+
+
+# --- the bot itself refuses --live without a pass ---------------------------------
+
+LIVE_CONFIG = (
+    "exchange: grvt\ngrvt:\n  env: testnet\n"
+    "trading:\n  symbol: BTC_USDT_Perp\n  timeframe: 1m\n  strategy: ping_pong\n"
+)
+
+
+def checked(tmp_path, config_text=LIVE_CONFIG):
+    """A config file, real candles, and the arguments a run in tmp_path needs."""
+    store_candles(tmp_path / "candles")
+    path = tmp_path / "config.yaml"
+    path.write_text(config_text, encoding="utf-8")
+    return [
+        "--config",
+        str(path),
+        "--days",
+        "2",
+        "--data-dir",
+        str(tmp_path / "candles"),
+        "--log-file",
+        str(tmp_path / "logs" / "bot.log"),
+        "--state-file",
+        str(tmp_path / "state.json"),
+        "--audit-file",
+        str(tmp_path / "audit.jsonl"),
+        "--runs-file",
+        str(tmp_path / "runs.jsonl"),
+        "--trace-file",
+        str(tmp_path / "trace.jsonl"),
+    ]
+
+
+def test_live_is_refused_before_anything_connects_when_the_strategy_was_never_checked(
+    tmp_path, capsys
+):
+    args = checked(tmp_path)
+    assert main([*args, "--live", "--iterations", "1"]) == 2
+    out = capsys.readouterr().out
+    assert "'ping_pong' has never passed --check" in out
+    assert f"tradebot --config {args[1]} --check" in out
+    # Refused by the gate, not by the missing keys further on.
+    assert "api_key" not in out
+    assert not (tmp_path / "runs.jsonl").exists(), "no run was started"
+
+
+def test_after_a_pass_the_same_live_command_gets_past_the_gate(tmp_path, capsys):
+    args = checked(tmp_path)
+    assert main([*args, "--check"]) == 0
+    capsys.readouterr()
+    # No keys in this config, so it stops at the credentials - one step later.
+    assert main([*args, "--live", "--iterations", "1"]) == 2
+    out = capsys.readouterr().out
+    assert "passed on this file and this market" in out
+    assert "never passed" not in out
+
+
+def test_paper_and_the_read_only_live_actions_are_not_gated(tmp_path, capsys):
+    args = checked(tmp_path)
+    assert main([*args, "--dry-run", "--iterations", "1"]) == 0
+    assert "never passed --check" not in capsys.readouterr().out
+    # These stop at the missing keys, which is the point: the gate let them by.
+    for action in ("--doctor", "--fetch-candles", "--resume"):
+        main([*args, "--live", action])
+        out = capsys.readouterr().out
+        assert "never passed --check" not in out, action
+        assert "api_key" in out, action
+
+
+def write_report(folder: Path, **fields) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    cls = type(build_strategy("ping_pong", config()))
+    from tradebot.cli.check import fingerprint
+
+    report = {
+        "strategy": "ping_pong",
+        "passed": True,
+        "fingerprint": fingerprint(cls)[1],
+        "market": "grvt BTC_USDT_Perp 1m",
+    }
+    report.update(fields)
+    (folder / "check-ping_pong.json").write_text(json.dumps(report), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "fields, why",
+    [
+        ({}, None),
+        ({"passed": False}, "did not pass"),
+        ({"fingerprint": "0123456789abcdef"}, "changed since it passed"),
+        ({"market": "grvt ETH_USDT_Perp 1m"}, "not on grvt BTC_USDT_Perp 1m"),
+        ({"market": None}, "did not record"),
+    ],
+)
+def test_a_pass_counts_only_for_that_file_on_that_market(tmp_path, fields, why):
+    from tradebot.cli.check import clearance
+
+    write_report(tmp_path, **fields)
+    cls = type(build_strategy("ping_pong", config()))
+    answer = clearance("ping_pong", cls, config(), tmp_path)
+    if why is None:
+        assert answer is None
+    else:
+        assert answer is not None and why in answer
+
+
+def test_a_damaged_report_is_a_refusal_not_a_crash(tmp_path):
+    from tradebot.cli.check import clearance
+
+    (tmp_path / "check-ping_pong.json").write_text("{not json", encoding="utf-8")
+    cls = type(build_strategy("ping_pong", config()))
+    assert "cannot read" in clearance("ping_pong", cls, config(), tmp_path)

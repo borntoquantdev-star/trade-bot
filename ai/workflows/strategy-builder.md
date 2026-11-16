@@ -244,7 +244,9 @@ It runs four layers (contract, these tests, real candles, paper) and ends in
 PASS or NOT YET. On NOT YET, read the failed lines to the user in Thai, fix
 the code, and run it again. **Do not go on to Phase 5 until it says PASS**,
 and run it again after every change to the strategy file: the fingerprint in
-`logs/check-<name>.json` belongs to the exact file that passed.
+`logs/check-<name>.json` belongs to the exact file that passed. The bot holds
+you to it: `--live` refuses to start until that report says passed, for this
+file and this config's exchange, symbol and timeframe. There is no override.
 
 Then watch it run offline, where nothing can be lost:
 

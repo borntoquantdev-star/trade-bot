@@ -165,6 +165,13 @@ It prints PASS or NOT YET with the reasons, exits 0 only on a pass, and keeps
 the report in `logs/check-<name>.json`. The fingerprint in it is a hash of the
 strategy's file: change the file and the pass no longer applies.
 
+The bot enforces it. A trading run with `--live` reads that report first and
+refuses, before connecting, unless the last check of this strategy passed, on
+this exact file, on the same exchange, symbol and timeframe. It prints the
+`--check` command to run. There is no flag to skip it. `--live --doctor`,
+`--live --fetch-candles`, `--live --resume` and `--close` are not gated: they
+never ask the strategy anything.
+
 A pass means the strategy does what it says without breaking anything. It does
 not mean it makes money; that is `--backtest` and time.
 

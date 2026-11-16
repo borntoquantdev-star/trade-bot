@@ -87,6 +87,8 @@ class Report:
     class_name: str
     source: str
     fingerprint: str
+    #: "exchange symbol timeframe": the replay layer only vouched for this one.
+    market: str = ""
     findings: list[Finding] = field(default_factory=list)
 
     def add(self, layer: str, name: str, status: str, detail: str = "") -> None:
@@ -111,15 +113,17 @@ class Report:
             "class": self.class_name,
             "source": self.source,
             "fingerprint": self.fingerprint,
+            "market": self.market,
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "passed": self.passed,
             "findings": [vars(f) for f in self.findings],
         }
 
     def text(self) -> str:
+        where = f"  on {self.market}" if self.market else ""
         lines = [
             f"CHECK  {self.strategy}  ({self.class_name}, {self.source})",
-            f"       fingerprint {self.fingerprint}",
+            f"       fingerprint {self.fingerprint}{where}",
         ]
         titles = {
             "contract": "1 CONTRACT  rules every strategy must keep",
@@ -706,7 +710,13 @@ def run_check(
     quiet = log or logging.getLogger("tradebot.check")
     cls = type(make())
     source, digest = fingerprint(cls)
-    report = Report(strategy=name, class_name=cls.__name__, source=source, fingerprint=digest)
+    report = Report(
+        strategy=name,
+        class_name=cls.__name__,
+        source=source,
+        fingerprint=digest,
+        market=market_of(config),
+    )
     base = D("60000")
     check_contract(report, make, config.trading.symbol, base)
     if run_tests:
@@ -716,8 +726,53 @@ def run_check(
     return report
 
 
+def market_of(config: BotConfig) -> str:
+    return f"{config.exchange} {config.trading.symbol} {config.trading.timeframe}"
+
+
+def report_path(folder: Path, name: str) -> Path:
+    return folder / f"check-{name}.json"
+
+
 def write(report: Report, folder: Path) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"check-{report.strategy}.json"
+    path = report_path(folder, report.strategy)
     path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
     return path
+
+
+# --- the gate in front of --live ---------------------------------------------
+
+
+def clearance(name: str, cls: type, config: BotConfig, folder: Path) -> str | None:
+    """Why a live run of this strategy may not start yet; None when it may.
+
+    The bot itself asks, not only the plugin that tells people what to type:
+    a command typed by hand, or copied from an old chat, goes through here too.
+    A pass counts only for the file it read (its fingerprint) and the market
+    its replay used, so editing the strategy or pointing it at another market
+    needs a fresh check. There is no flag to skip this; the way past it is the
+    check, which is offline and takes seconds.
+    """
+    path = report_path(folder, name)
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return f"'{name}' has never passed --check (no {path.as_posix()})"
+    except (OSError, ValueError) as exc:
+        return f"cannot read {path.as_posix()}: {exc}"
+    if not isinstance(saved, dict):
+        return f"{path.as_posix()} is not a check report"
+    if saved.get("passed") is not True:
+        return f"the last --check of '{name}' did not pass (see {path.as_posix()})"
+    _, digest = fingerprint(cls)
+    if saved.get("fingerprint") != digest:
+        return (
+            f"'{name}' changed since it passed --check (fingerprint {saved.get('fingerprint')} "
+            f"then, {digest} now)"
+        )
+    market = market_of(config)
+    if saved.get("market") != market:
+        then = saved.get("market") or "a market this version did not record"
+        return f"'{name}' passed --check on {then}, not on {market}"
+    return None
