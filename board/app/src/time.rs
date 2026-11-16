@@ -207,6 +207,16 @@ pub fn clock(iso: &str) -> String {
         .unwrap_or_else(|| iso.to_owned())
 }
 
+/// `2026-11-16 12:18:06` in Thai time for an ISO timestamp, or the text
+/// itself if it is not one. For history: a list that reaches back past
+/// midnight needs the day as well as the time, or 23:59 yesterday reads as
+/// later than 00:01 today. The same shape GRVT's own history tables print.
+pub fn stamp(iso: &str) -> String {
+    local(iso)
+        .map(|at| format!("{} {}", at.date(), at.clock()))
+        .unwrap_or_else(|| iso.to_owned())
+}
+
 /// `23:47` for an ISO timestamp, or an empty string.
 pub fn hhmm(iso: &str) -> String {
     local(iso).map(|at| at.hhmm()).unwrap_or_default()

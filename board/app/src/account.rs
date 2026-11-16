@@ -26,6 +26,7 @@ use serde_json::Value;
 
 pub use crate::candles::Load;
 use crate::exchange::{clock, Num};
+use crate::time::stamp;
 
 /// How often each thing is asked for again, in seconds.
 ///
@@ -368,7 +369,7 @@ pub fn read_orders(result: &Value) -> Vec<Order> {
                 is_market: flag_of(row.get("is_market")),
                 reduce_only: flag_of(row.get("reduce_only")),
                 client_order_id: text_of(meta.and_then(|meta| meta.get("client_order_id"))),
-                at: clock(&text_of(meta.and_then(|meta| meta.get("create_time_at")))),
+                at: stamp(&text_of(meta.and_then(|meta| meta.get("create_time_at")))),
                 order_id: text_of(row.get("order_id")),
                 created: nanos_of(meta.and_then(|meta| meta.get("create_time"))),
                 updated: nanos_of(state.and_then(|state| state.get("update_time"))),
@@ -390,7 +391,7 @@ pub fn read_fills(result: &Value) -> Vec<Fill> {
             fee_rate: Num::from(row.get("fee_rate")),
             realized: Num::from(row.get("realized_pnl")),
             currency: text_of(row.get("fee_currency")),
-            at: clock(&text_of(row.get("event_time_at"))),
+            at: stamp(&text_of(row.get("event_time_at"))),
             client_order_id: text_of(row.get("client_order_id")),
             order_id: text_of(row.get("order_id")),
             when: nanos_of(row.get("event_time")),
@@ -405,7 +406,7 @@ pub fn read_funding(result: &Value) -> Vec<FundingPayment> {
             instrument: text_of(row.get("instrument")),
             currency: text_of(row.get("currency")),
             amount: Num::from(row.get("amount")),
-            at: clock(&text_of(row.get("event_time_at"))),
+            at: stamp(&text_of(row.get("event_time_at"))),
         })
         .collect()
 }
@@ -423,8 +424,8 @@ pub fn read_closed(result: &Value) -> Vec<Closed> {
             fees: Num::from(row.get("cumulative_fee")),
             funding: Num::from(row.get("cumulative_realized_funding_payment")),
             status: text_of(row.get("status")),
-            opened_at: clock(&text_of(row.get("open_time_at"))),
-            closed_at: clock(&text_of(row.get("close_time_at"))),
+            opened_at: stamp(&text_of(row.get("open_time_at"))),
+            closed_at: stamp(&text_of(row.get("close_time_at"))),
         })
         .collect()
 }
@@ -731,7 +732,7 @@ mod tests {
         assert_eq!(order.price.as_ref().unwrap().text, "68769.2");
         assert_eq!(order.filled.as_ref().unwrap().text, "0.145");
         assert_eq!(order.status, "FILLED");
-        assert_eq!(order.at, "15:59:45", "เวลาไทย = UTC+7");
+        assert_eq!(order.at, "2026-11-13 15:59:45", "เวลาไทย = UTC+7");
         assert_eq!(order.done(), Some(1.0));
     }
 
@@ -764,7 +765,11 @@ mod tests {
         assert_eq!(fill.fee.as_ref().unwrap().text, "4.491594");
         assert_eq!(fill.fee_rate.as_ref().unwrap().value, 0.045);
         assert!(fill.is_taker);
-        assert_eq!(fill.at, "16:03:06", "เวลาไทย = UTC+7");
+        assert_eq!(fill.at, "2026-11-13 16:03:06", "เวลาไทย = UTC+7");
+        // 17:30 UTC is already the next day in Thailand: the date moves
+        // with the time, not with the exchange's UTC date.
+        let late = read_fills(&json!([{"event_time_at": "2026-11-13T17:30:00Z"}]));
+        assert_eq!(late[0].at, "2026-11-14 00:30:00", "ข้ามเที่ยงคืนเวลาไทย");
     }
 
     #[test]
@@ -785,7 +790,7 @@ mod tests {
         let closed = &rows[0];
         assert!(!closed.is_long);
         assert_eq!(closed.after_costs(), Some(-17.7915));
-        assert_eq!(closed.opened_at, "16:00:50", "เวลาไทย = UTC+7");
+        assert_eq!(closed.opened_at, "2026-11-13 16:00:50", "เวลาไทย = UTC+7");
         // Fees were half the loss: the lesson the demo strategy exists to teach.
         let share = closed.fee_share().unwrap();
         assert!((share - 0.5046).abs() < 0.001, "{share}");
@@ -874,7 +879,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].instrument, "BTC_USDT_Perp");
         assert_eq!(rows[0].amount.as_ref().unwrap().text, "0.4213");
-        assert_eq!(rows[0].at, "23:47:11", "เวลาไทย");
+        assert_eq!(rows[0].at, "2026-11-13 23:47:11", "เวลาไทย");
     }
 
     /// GRVT counts a payment as positive when the account paid. The card

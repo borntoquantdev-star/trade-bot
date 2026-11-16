@@ -3180,7 +3180,7 @@ impl Board {
                     }
                     return;
                 }
-                columns(ui, "เวลา", "สัญญา", "ผลต่อบัญชี");
+                columns(ui, "วันที่ เวลา", "สัญญา", "ผลต่อบัญชี");
                 ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical()
                     .id_salt("paid_funding")
@@ -4133,7 +4133,7 @@ impl Board {
                     }
                     return;
                 }
-                columns(ui, "เวลา", "ราคา", "ได้ไปแล้ว");
+                columns(ui, "วันที่ เวลา", "ราคา", "ได้ไปแล้ว");
                 ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical()
                     .id_salt("open_orders")
@@ -4182,7 +4182,7 @@ impl Board {
                     Self::no_account(ui, &load);
                     return;
                 }
-                columns(ui, "เวลา", "ราคา", "สถานะ");
+                columns(ui, "วันที่ เวลา", "ราคา", "สถานะ");
                 ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical()
                     .id_salt("orders")
@@ -4306,7 +4306,7 @@ impl Board {
                     Self::no_account(ui, &load);
                     return;
                 }
-                columns(ui, "เวลา", "ราคา x จำนวน", "ค่าธรรมเนียม");
+                columns(ui, "วันที่ เวลา", "ราคา x จำนวน", "ค่าธรรมเนียม");
                 ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical()
                     .id_salt("fills")
