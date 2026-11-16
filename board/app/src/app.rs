@@ -1595,24 +1595,47 @@ impl Board {
     /// price with, and where it acted.
     fn shape_card(&mut self, ui: &mut egui::Ui) {
         let mut slot = self.slot("shape");
-        let newest = self.bot.rows.last();
-        let run = newest.and_then(|row| self.past.runs.iter().find(|run| run.covers(&row.at)));
+        // While a past tick is replayed the picture is of *its* run, cut off
+        // at that run's last tick: the newest run may be a different one,
+        // even one that stopped on its first tick (seen on 16 Nov).
+        let replay = self.replaying();
+        let anchor = match self.shown() {
+            Some((index, _)) if replay => Some(index),
+            _ => self.bot.rows.len().checked_sub(1),
+        };
+        let anchor_row = anchor.map(|index| &self.bot.rows[index]);
+        let run = anchor_row.and_then(|row| self.past.runs.iter().find(|run| run.covers(&row.at)));
+        let end = match (anchor, run) {
+            (Some(index), Some(run)) if replay => self
+                .bot
+                .rows
+                .iter()
+                .rposition(|row| run.covers(&row.at))
+                .unwrap_or(index),
+            (Some(index), _) if replay => index,
+            _ => self.bot.rows.len().saturating_sub(1),
+        };
+        let rows = &self.bot.rows[..(end + 1).min(self.bot.rows.len())];
         let since = run.and_then(|run| crate::time::unix_of(&run.started_at));
         let name = run.map(|run| run.strategy.clone()).unwrap_or_default();
-        let halted = self.shape_stopped();
-        let ticks = shape::ticks(&self.bot.rows, shape::SHOWN, since);
+        // "Stopped" is about the bot now; a replay is history either way.
+        let halted = if replay { None } else { self.shape_stopped() };
+        let ticks = shape::ticks(rows, shape::SHOWN, since);
         let banded = shape::has_band(&ticks);
-        let settings = shape::settings(&self.bot.rows);
+        let settings = shape::settings(rows);
         // A replayed tick is marked on the picture, so stepping the
         // pipeline shows where on the chart that decision was made.
-        let focus = if self.replaying() {
-            self.shown().map(|(_, row)| row.at.clone())
+        let focus = if replay {
+            anchor_row.map(|row| row.at.clone())
         } else {
             None
         };
-        let sentence = newest.and_then(shape::waiting_for);
+        let replay_clock = anchor_row.filter(|_| replay).map(|row| bot::clock(&row.at));
+        let sentence = anchor_row.and_then(shape::waiting_for);
         let (state, status) = if ticks.len() < 2 {
             (theme::State::Idle, "ยังไม่มี tick".to_string())
+        } else if let Some(clock) = &replay_clock {
+            (theme::State::Idle, format!("เล่นซ้ำ tick {clock}"))
         } else if halted.is_some() {
             (theme::State::Idle, "หยุดแล้ว · ภาพรอบล่าสุด".to_string())
         } else if banded {
@@ -1695,7 +1718,9 @@ impl Board {
                 // line ran off the card (seen on the board, 16 Nov).
                 if let Some(sentence) = &sentence {
                     ui.label(
-                        egui::RichText::new(if halted.is_some() {
+                        egui::RichText::new(if let Some(clock) = &replay_clock {
+                            format!("ตอน {clock}: {sentence}")
+                        } else if halted.is_some() {
                             format!("ตอนจบรอบ: {sentence}")
                         } else {
                             format!("ตอนนี้: {sentence}")
@@ -1766,7 +1791,16 @@ impl Board {
         let account = self.bot.account.clone();
         let has = self.bot.has_live();
         let load = self.bot.state_load.clone();
-        let state = if account.halted {
+        // This card reads the state file, which is now. During a replay it
+        // says so, and puts the replayed tick's own figure on top, so today's
+        // halt is not read as the reason for a tick it had nothing to do with.
+        let then = self
+            .shown()
+            .filter(|_| self.replaying())
+            .map(|(_, row)| (bot::clock(&row.at), row.equity.clone(), row.reject.clone()));
+        let state = if then.is_some() {
+            theme::State::Idle
+        } else if account.halted {
             theme::State::Bad
         } else if has {
             theme::State::Ok
@@ -1783,6 +1817,11 @@ impl Board {
             // bot still running on yesterday's budget (no tick since
             // midnight) is visible rather than assumed.
             format!("วันของบอท {}", account.day)
+        };
+        let status = if then.is_some() {
+            "ตอนนี้ · ไม่ใช่ tick ที่เล่นซ้ำ".to_string()
+        } else {
+            status
         };
         let (state, status) = stale_if_failed(&load, state, status);
         // The exchange figure, when the server has a key. It leads the card
@@ -1810,19 +1849,53 @@ impl Board {
                     );
                     return;
                 }
+                if let Some((clock, equity, reject)) = &then {
+                    let gate = match reject {
+                        Some(reject) => format!("ด่านปัดตก ({})", reject.code),
+                        None => "ยังไม่ได้หยุด".to_string(),
+                    };
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "ตอน tick {clock}: ทุนที่บอทบันทึก {equity} · {gate}"
+                        ))
+                        .size(11.0)
+                        .color(theme::ACCENT),
+                    );
+                    ui.label(
+                        egui::RichText::new("ข้างล่างเป็นของตอนนี้")
+                            .size(10.0)
+                            .color(theme::DIM),
+                    );
+                    ui.add_space(4.0);
+                }
                 // Halted first and loudest: every number under it is history.
+                // During a replay it is still said, but as now, not as then.
                 if account.halted {
                     ui.label(
                         egui::RichText::new(format!(
-                            "หยุดอยู่: {}",
+                            "{}: {}",
+                            if then.is_some() {
+                                "ตอนนี้หยุดอยู่"
+                            } else {
+                                "หยุดอยู่"
+                            },
                             if account.halt_reason.is_empty() {
                                 "ไม่ได้บันทึกเหตุผล"
+                            } else if then.is_some() {
+                                // Just the code while replaying: the reason is
+                                // about now, and the card has room for the
+                                // tick's line or the whole reason, not both.
+                                account.halt_reason.split(':').next().unwrap_or_default()
                             } else {
                                 &account.halt_reason
                             }
                         ))
                         .size(11.5)
-                        .color(theme::BAD),
+                        .color(if then.is_some() {
+                            theme::DIM
+                        } else {
+                            theme::BAD
+                        }),
                     );
                     ui.add_space(6.0);
                 }
@@ -1964,7 +2037,9 @@ impl Board {
         }
         out.push((
             "account",
-            if self.bot.account.halted {
+            if self.replaying() {
+                theme::State::Idle
+            } else if self.bot.account.halted {
                 theme::State::Bad
             } else if has {
                 theme::State::Ok
@@ -2388,9 +2463,10 @@ impl Board {
     /// halt flag and the day's figures, and has no history to rewind.
     fn stages_now(&self) -> Vec<bot::Stage> {
         match self.shown() {
-            Some((index, _)) if self.replaying() => {
-                bot::stages_of(&self.bot.rows[..=index], self.bot.state.as_ref())
-            }
+            // The state file is now. A replayed tick is then: if the gate
+            // refused it for a halt, its own row says so; today's halt does
+            // not reach back into a tick it approved (seen on 16 Nov).
+            Some((index, _)) if self.replaying() => bot::stages_of(&self.bot.rows[..=index], None),
             _ => self.bot.stages.clone(),
         }
     }
@@ -5940,6 +6016,82 @@ mod tests {
             painted.iter().any(|text| text.contains("-26.7666")),
             "ไม่มีตัวเลขติดลบบนจอเลย · ที่วาดจริงคือ {painted:?}"
         );
+    }
+
+    #[test]
+    fn replaying_a_tick_from_before_a_halt_does_not_show_the_halt_as_its_own() {
+        // 12:17 the gate approved a sell; at 14:57 a later run hit the day's
+        // loss limit, and the state file still says halted. Replaying 12:17
+        // used to paint the 14:57 halt on the gate card and the money card
+        // as if it had stopped that tick (16 Nov).
+        let mut board = Board::default();
+        board.bot.rows = vec![
+            serde_json::from_str(
+                r#"{"at":"2026-11-16T05:17:29+00:00","symbol":"BTC_USDT_Perp","price":"64603.5",
+                    "equity":"9710.35",
+                    "signal":{"side":"sell","ref_price":"64603.5","stop_price":"64861.9","reason":"x"},
+                    "order":{"client_order_id":"1","side":"sell","qty":"0.15",
+                             "limit_price":"64539","risk_amount":"38.7"}}"#,
+            )
+            .unwrap(),
+            serde_json::from_str(
+                r#"{"at":"2026-11-16T07:57:23+00:00","symbol":"BTC_USDT_Perp","price":"65015.2",
+                    "equity":"9691.51",
+                    "signal":{"side":"sell","ref_price":"65015.2","stop_price":"65275.3","reason":"x"},
+                    "reject":{"code":"daily_loss_limit","detail":"today's realised loss -308.49"}}"#,
+            )
+            .unwrap(),
+        ];
+        board.bot.state = Some(crate::bot::BotState {
+            day: "2026-11-16".into(),
+            day_start_equity: "10000".into(),
+            peak_equity: "10002".into(),
+            halted: true,
+            halt_reason: "daily_loss_limit: today's realised loss -308.49".into(),
+            ..Default::default()
+        });
+        board.bot.account = crate::bot::account_of(&board.bot.rows, board.bot.state.as_ref());
+        board.bot.stages = crate::bot::stages_of(&board.bot.rows, board.bot.state.as_ref());
+        board.replay = Some(board.bot.rows[0].at.clone());
+
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(
+            painted.contains("อนุมัติ"),
+            "ด่านต้องเล่าว่า 12:17 อนุมัติ: {painted}"
+        );
+        assert_eq!(
+            painted.matches("หยุดอยู่:").count(),
+            1,
+            "มีได้แค่บรรทัด 'ตอนนี้หยุดอยู่' ในการ์ดทุน: {painted}"
+        );
+        assert!(painted.contains("ตอนนี้หยุดอยู่"), "{painted}");
+        assert!(painted.contains("ตอน tick 12:17:29"), "{painted}");
+        assert!(painted.contains("ไม่ใช่ tick ที่เล่นซ้ำ"), "{painted}");
+
+        // Back on the newest tick, the halt is today's and is said plainly.
+        board.replay = None;
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(painted.contains("หยุดอยู่: daily_loss_limit"), "{painted}");
+        assert!(!painted.contains("ไม่ใช่ tick ที่เล่นซ้ำ"), "{painted}");
+    }
+
+    /// While a past tick is replayed, the strategy picture is of that tick's
+    /// run - not of whatever ran last.
+    #[test]
+    fn the_strategy_picture_follows_the_replayed_tick_into_its_own_run() {
+        let mut board = Board::default();
+        board.bot.rows = ping_pong_rows(2.0);
+        // A later run that stopped on its first tick, with nothing to draw.
+        let mut later = board.bot.rows.last().unwrap().clone();
+        later.at = crate::time::clock_iso(crate::time::now_unix().unwrap() + 3600.0);
+        later.view = None;
+        board.bot.rows.push(later);
+        board.replay = Some(board.bot.rows[21].at.clone());
+
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(painted.contains("เล่นซ้ำ tick"), "{painted}");
+        assert!(painted.contains("ตอน "), "{painted}");
+        assert!(!painted.contains("ตอนนี้:"), "{painted}");
     }
 
     /// The status card leads with the exchange figure, and says so.
