@@ -90,6 +90,13 @@ const MOVED_FOR_SHAPE: [&str; 14] = [
 
 /// ASCII names for the zones, in the same order as `VIEWS`, for a link or
 /// an environment variable - places where typing Thai is a nuisance.
+/// How to start the bot again, as typed into a fresh PowerShell in the
+/// bot's folder. The venv line is the step people miss: without it
+/// `tradebot` is "not recognized".
+const RUN_AGAIN: &str = "รันต่อ · เปิด PowerShell ในโฟลเดอร์บอท แล้วพิมพ์ทีละบรรทัด:
+.\\.venv\\Scripts\\Activate.ps1
+tradebot --config config/testnet.yaml --live --close-at-end";
+
 const VIEW_ALIASES: [&str; 5] = ["market", "bot", "test", "account", "history"];
 
 /// `%E0%B8%9A` back to the bytes it stands for. Anything that is not a
@@ -1622,12 +1629,14 @@ impl Board {
                 // First, before anything that reads as live: a picture that
                 // has stopped moving must say why.
                 if let Some(why) = &halted {
+                    ui.label(egui::RichText::new(why).size(11.0).color(theme::WARN));
+                    // The venv step too: a bare `tradebot` in a fresh
+                    // PowerShell is "not recognized" (hit on 16 Nov).
                     ui.label(
-                        egui::RichText::new(format!(
-                            "{why} · รันต่อ: tradebot --config config/testnet.yaml --live"
-                        ))
-                        .size(11.0)
-                        .color(theme::WARN),
+                        egui::RichText::new(RUN_AGAIN)
+                            .size(11.0)
+                            .monospace()
+                            .color(theme::WARN),
                     );
                 }
                 if banded {
@@ -5426,6 +5435,10 @@ mod tests {
         assert!(painted.contains("บอทน่าจะหยุดไปแล้ว"), "{painted}");
         assert!(painted.contains("ตอนจบรอบ: ถือซื้ออยู่"), "{painted}");
         assert!(!painted.contains("ตอนนี้:"), "{painted}");
+        // The way back includes opening the venv, before `tradebot`.
+        let venv = painted.find(r".\.venv\Scripts\Activate.ps1");
+        let run = painted.find("tradebot --config config/testnet.yaml --live");
+        assert!(venv.is_some() && run.is_some() && venv < run, "{painted}");
     }
 
     /// A strategy that does not report its lines gets a picture of the
