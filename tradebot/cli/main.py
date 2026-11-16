@@ -207,6 +207,17 @@ def _load(args: argparse.Namespace, log: logging.Logger) -> BotConfig | None:
     try:
         return load_config(path)
     except ConfigError as exc:
+        # A testnet config with its keys not filled in yet is still fine for
+        # everything that never reaches the exchange: paper, --check,
+        # --backtest. Refusing it there stopped a student with no keys from
+        # checking their own strategy (16 Nov). --live still refuses.
+        if args.live or "environment variable is not set" not in str(exc):
+            log.error("%s", exc)
+            return None
+        log.warning("%s - fine without --live, which is the only thing that needs it", exc)
+    try:
+        return load_config(path, allow_missing_env=True)
+    except ConfigError as exc:
         log.error("%s", exc)
         return None
 

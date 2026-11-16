@@ -345,3 +345,29 @@ def test_a_backtest_with_no_candles_says_to_fetch_with_live(tmp_path, config_fil
     assert main(argv + paths(tmp_path)) == 2
     out = capsys.readouterr().out
     assert f"fix:   tradebot --config {path} --live --fetch-candles --days 1" in out
+
+
+KEYLESS_CONFIG = """
+exchange: grvt
+grvt:
+  env: testnet
+  api_key: "${NO_SUCH_KEY_FOR_THIS_TEST}"
+trading:
+  symbol: BTC_USDT_Perp
+  loop_interval: 1
+  warmup_candles: 5
+"""
+
+
+def test_a_config_whose_keys_are_not_set_yet_still_runs_on_paper(tmp_path, config_file, capsys):
+    # A student who has not put keys in config/.env yet must still be able
+    # to dry-run, backtest and --check with the testnet config (16 Nov).
+    path = config_file(KEYLESS_CONFIG)
+    assert main(["--config", path, "--dry-run", "--iterations", "1", *paths(tmp_path)]) == 0
+    assert "NO_SUCH_KEY_FOR_THIS_TEST" in capsys.readouterr().out
+
+
+def test_live_still_refuses_a_config_whose_keys_are_not_set(tmp_path, config_file, capsys):
+    path = config_file(KEYLESS_CONFIG)
+    assert main(["--config", path, "--live", "--iterations", "1", *paths(tmp_path)]) == 2
+    assert "environment variable is not set" in capsys.readouterr().out

@@ -304,27 +304,34 @@ class BotConfig:
 # --- loading ---------------------------------------------------------------
 
 
-def _expand_env(value: Any, environ: Mapping[str, str]) -> Any:
+def _expand_env(value: Any, environ: Mapping[str, str], lenient: bool = False) -> Any:
     """Replace a whole-string ``${VAR}`` with its value from *environ*.
 
     The mapping is passed in rather than read from ``os.environ`` here, so
     that a ``.env`` file and a test's own environment both work - and so
     that ``load_config(env=...)`` means what it says.
+
+    *lenient* leaves an unset variable empty instead of refusing. For runs
+    that never reach the exchange - paper, ``--check``, ``--backtest`` - a
+    testnet config whose keys are not filled in yet is still a usable
+    config; ``require_live_credentials`` stops anything that would need them.
     """
     if isinstance(value, str):
         match = _ENV_PATTERN.match(value.strip())
         if match:
             name = match.group(1)
             if name not in environ:
+                if lenient:
+                    return ""
                 raise ConfigError(
                     f"the config refers to ${{{name}}} but that environment variable is not set"
                 )
             return environ[name]
         return value
     if isinstance(value, Mapping):
-        return {k: _expand_env(v, environ) for k, v in value.items()}
+        return {k: _expand_env(v, environ, lenient) for k, v in value.items()}
     if isinstance(value, list):
-        return [_expand_env(v, environ) for v in value]
+        return [_expand_env(v, environ, lenient) for v in value]
     return value
 
 
@@ -409,11 +416,13 @@ def load_config(
     path: str | Path | None = None,
     data: Mapping[str, Any] | None = None,
     env: Mapping[str, str] | None = None,
+    allow_missing_env: bool = False,
 ) -> BotConfig:
     """Build a :class:`BotConfig` from a YAML file and/or a mapping.
 
     Precedence, lowest first: built-in defaults, the YAML file, *data*, then
-    environment variables.
+    environment variables. *allow_missing_env* leaves an unset ``${VAR}``
+    empty rather than refusing - only for runs that never reach the exchange.
     """
     merged = raw_defaults()
     source = "<defaults>"
@@ -440,7 +449,7 @@ def load_config(
         if not isinstance(loaded, Mapping):
             raise ConfigError(f"{file_path} must contain a YAML mapping at the top level")
         exchange_was_set = exchange_was_set or "exchange" in loaded
-        _deep_merge(merged, _expand_env(loaded, expansion))
+        _deep_merge(merged, _expand_env(loaded, expansion, allow_missing_env))
         source = str(file_path)
 
     if data:
