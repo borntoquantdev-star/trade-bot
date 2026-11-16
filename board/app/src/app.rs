@@ -97,6 +97,12 @@ const RUN_AGAIN: &str = "รันต่อ · เปิด PowerShell ในโ
 .\\.venv\\Scripts\\Activate.ps1
 tradebot --config config/testnet.yaml --live --close-at-end";
 
+/// The backtest to run when the test view is empty: the config the bot
+/// is run with, so the replay is of the same strategy (the default config
+/// names `random`). Testnet keeps about 1000 one-minute bars, so one day.
+/// With no candles stored yet, the bot's own error names the fetch command.
+const BACKTEST: &str = "tradebot --config config/testnet.yaml --backtest --days 1 --trades";
+
 const VIEW_ALIASES: [&str; 5] = ["market", "bot", "test", "account", "history"];
 
 /// `%E0%B8%9A` back to the bytes it stands for. Anything that is not a
@@ -3574,7 +3580,7 @@ impl Board {
             state,
             |ui| {
                 let Some(view) = summary else {
-                    waiting(ui, &load, "tradebot --backtest --days 730 --trades");
+                    waiting(ui, &load, BACKTEST);
                     return;
                 };
                 egui::ScrollArea::vertical()
@@ -3697,7 +3703,7 @@ impl Board {
             state,
             |ui| {
                 let Some(view) = summary else {
-                    waiting(ui, &load, "tradebot --backtest --days 730 --trades");
+                    waiting(ui, &load, BACKTEST);
                     return;
                 };
                 egui::ScrollArea::vertical()
@@ -3875,7 +3881,7 @@ impl Board {
             state,
             |ui| {
                 let Some(view) = summary else {
-                    waiting(ui, &load, "tradebot --backtest --days 730 --trades");
+                    waiting(ui, &load, BACKTEST);
                     return;
                 };
                 let area = ui.max_rect();

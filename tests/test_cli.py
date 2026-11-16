@@ -304,3 +304,24 @@ def test_the_doctor_names_the_exchange_when_it_really_connected(tmp_path, caplog
 
     assert "live connection" in caplog.text
     assert "no credentials" not in caplog.text
+
+
+def test_a_paper_fetch_says_how_to_get_real_history_with_this_config(tmp_path, config_file, capsys):
+    # Without --live a testnet config fetches from the paper broker: one flat
+    # price, a backtest that never trades. The way out has to name this
+    # config, or it quietly reads the default one with another strategy.
+    path = config_file(TESTNET_CONFIG)
+    data = tmp_path / "candles"
+    argv = ["--config", path, "--fetch-candles", "--days", "1", "--data-dir", str(data)]
+    assert main(argv + paths(tmp_path)) == 0
+    out = capsys.readouterr().out
+    assert f"tradebot --config {path} --live --fetch-candles --days 1" in out
+    assert f"next: tradebot --config {path} --backtest --days 1" in out
+
+
+def test_a_backtest_with_no_candles_says_to_fetch_with_live(tmp_path, config_file, capsys):
+    path = config_file(TESTNET_CONFIG)
+    argv = ["--config", path, "--backtest", "--days", "1", "--data-dir", str(tmp_path / "x")]
+    assert main(argv + paths(tmp_path)) == 2
+    out = capsys.readouterr().out
+    assert f"fix:   tradebot --config {path} --live --fetch-candles --days 1" in out

@@ -401,9 +401,10 @@ def _fetch_candles(
 
     if paper:
         log.warning(
-            "the paper broker invents its candles. They exercise the download "
-            "path and tell you NOTHING about the market. Drop --dry-run and "
-            "supply credentials for real history."
+            "the paper broker invents its candles (one flat price). They exercise "
+            "the download path and tell you NOTHING about the market, and a "
+            "backtest on them never trades. For real history: %s",
+            _command(args, f"--live --fetch-candles --days {args.days}"),
         )
 
     try:
@@ -444,8 +445,19 @@ def _fetch_candles(
             "the history has holes. A backtest will skip them rather than "
             "invent prices, but the result covers less time than it looks."
         )
-    log.info("next: tradebot --backtest --days %s", args.days)
+    log.info("next: %s", _command(args, f"--backtest --days {args.days}"))
     return 0
+
+
+def _command(args: argparse.Namespace, rest: str) -> str:
+    """The command to type next, naming the config this run used.
+
+    Without ``--config`` the next command silently reads the default config,
+    which may name another strategy and another venue than this run did.
+    """
+    if args.config == DEFAULT_CONFIG:
+        return f"tradebot {rest}"
+    return f"tradebot --config {args.config} {rest}"
 
 
 def _backtest(config: BotConfig, args: argparse.Namespace, log: logging.Logger) -> int:
@@ -463,7 +475,7 @@ def _backtest(config: BotConfig, args: argparse.Namespace, log: logging.Logger) 
         coverage = store.coverage(config.exchange, symbol, interval)
         log.error("no stored candles for %s %s in that period.", symbol, interval)
         log.error("  store: %s", coverage.describe())
-        log.error("  fix:   tradebot --fetch-candles --days %s", args.days)
+        log.error("  fix:   %s", _command(args, f"--live --fetch-candles --days {args.days}"))
         return 2
 
     try:
