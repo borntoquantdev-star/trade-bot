@@ -16,6 +16,7 @@ use crate::feed::{Feed, Health};
 use crate::history::{self, Past};
 use crate::journey::{self, Mark, Phase, Trip};
 use crate::market::{parse, Env};
+use crate::shape;
 use crate::theme;
 use crate::traces::Traces;
 use crate::wire;
@@ -38,14 +39,14 @@ const INSTRUMENTS: [&str; 4] = [
 const VIEWS: [(&str, [f32; 5]); 5] = [
     ("ตลาด", [0.0, 0.0, 1450.0, 1060.0, 0.0]),
     // Wide enough for the order's trip, which sits past the last stage.
-    ("บอท", [350.0, 1130.0, 2270.0, 1670.0, 0.0]),
-    ("ทดสอบ", [20.0, 1680.0, 1330.0, 2250.0, 0.0]),
+    ("บอท", [350.0, 1130.0, 2270.0, 1950.0, 0.0]),
+    ("ทดสอบ", [20.0, 1980.0, 1330.0, 2550.0, 0.0]),
     // The account as the exchange holds it, which is the zone that settles
     // an argument between the bot's own figure and the website's.
-    ("บัญชีจริง", [20.0, 2290.0, 2110.0, 2940.0, 0.0]),
+    ("บัญชีจริง", [20.0, 2590.0, 2110.0, 3240.0, 0.0]),
     // What happened before now: every run the bot has made, and what each
     // day came to.
-    ("ประวัติ", [20.0, 2990.0, 1430.0, 3450.0, 0.0]),
+    ("ประวัติ", [20.0, 3290.0, 1430.0, 3750.0, 0.0]),
 ];
 
 /// The five stages of the pipeline, as card ids. One card each, so the road
@@ -55,8 +56,10 @@ const STAGES: [&str; 5] = ["s1", "s2", "s3", "s4", "s5"];
 
 /// Which card feeds which. Drawn under the cards, so a wire leaves an edge
 /// and arrives at an edge rather than crossing a face.
-const WIRES: [(&str, &str); 6] = [
+const WIRES: [(&str, &str); 7] = [
     ("s1", "s2"),
+    // The strategy, and the picture of what it is looking at, under it.
+    ("s2", "shape"),
     ("s2", "s3"),
     ("s3", "s4"),
     ("s4", "s5"),
@@ -65,6 +68,24 @@ const WIRES: [(&str, &str); 6] = [
     ("account", "s3"),
     // Whatever the broker did ends up in the trail.
     ("s4", "log"),
+];
+
+/// The cards that moved down to make room for the strategy picture.
+const MOVED_FOR_SHAPE: [&str; 14] = [
+    "code",
+    "backtest",
+    "quality",
+    "equity",
+    "notes",
+    "balance",
+    "positions",
+    "open_orders",
+    "orders",
+    "paid_funding",
+    "closed",
+    "fills",
+    "runs",
+    "calendar",
 ];
 
 /// ASCII names for the zones, in the same order as `VIEWS`, for a link or
@@ -246,7 +267,11 @@ impl Default for Board {
         // Under the row of stages and to the left of the account, in the
         // space their own wires do not cross. Wide, because code read
         // through a slot is not read.
-        slots.insert("code", Slot::new(390.0, 1390.0, 560.0, 240.0));
+        // Straight under the strategy: what it is looking at, tick by tick.
+        // A strategy is a rule about lines on a chart, and a rule read
+        // without its chart is the part students stay confused by.
+        slots.insert("shape", Slot::new(390.0, 1390.0, 560.0, 285.0));
+        slots.insert("code", Slot::new(390.0, 1695.0, 560.0, 240.0));
         // These two sit under the stage they belong to, so their wires are
         // short verticals instead of long lines passing behind other cards.
         slots.insert("account", Slot::new(970.0, 1380.0, 300.0, 250.0));
@@ -254,26 +279,26 @@ impl Default for Board {
         // Past the last stage, as tall as the stage and the row under it:
         // an order's trip is five steps and a list of fills, read top down.
         slots.insert("trip", Slot::new(1840.0, 1160.0, 400.0, 470.0));
-        slots.insert("backtest", Slot::new(40.0, 1700.0, 390.0, 320.0));
-        slots.insert("quality", Slot::new(450.0, 1700.0, 390.0, 320.0));
-        slots.insert("equity", Slot::new(870.0, 1700.0, 420.0, 320.0));
-        slots.insert("notes", Slot::new(40.0, 2040.0, 800.0, 180.0));
+        slots.insert("backtest", Slot::new(40.0, 2000.0, 390.0, 320.0));
+        slots.insert("quality", Slot::new(450.0, 2000.0, 390.0, 320.0));
+        slots.insert("equity", Slot::new(870.0, 2000.0, 420.0, 320.0));
+        slots.insert("notes", Slot::new(40.0, 2340.0, 800.0, 180.0));
         // The account zone. Money first and widest, because it is the
         // number a person looks for; the histories below it, because they
         // explain how the money got that way.
-        slots.insert("balance", Slot::new(40.0, 2320.0, 380.0, 260.0));
-        slots.insert("positions", Slot::new(440.0, 2320.0, 540.0, 260.0));
-        slots.insert("open_orders", Slot::new(1000.0, 2320.0, 540.0, 260.0));
+        slots.insert("balance", Slot::new(40.0, 2620.0, 380.0, 260.0));
+        slots.insert("positions", Slot::new(440.0, 2620.0, 540.0, 260.0));
+        slots.insert("open_orders", Slot::new(1000.0, 2620.0, 540.0, 260.0));
         // As tall as its row now, to make room under it for the funding
         // the account actually paid; it scrolls, so nothing is lost.
-        slots.insert("orders", Slot::new(1560.0, 2320.0, 540.0, 260.0));
-        slots.insert("paid_funding", Slot::new(1560.0, 2600.0, 540.0, 320.0));
-        slots.insert("closed", Slot::new(40.0, 2600.0, 700.0, 320.0));
-        slots.insert("fills", Slot::new(760.0, 2600.0, 780.0, 320.0));
+        slots.insert("orders", Slot::new(1560.0, 2620.0, 540.0, 260.0));
+        slots.insert("paid_funding", Slot::new(1560.0, 2900.0, 540.0, 320.0));
+        slots.insert("closed", Slot::new(40.0, 2900.0, 700.0, 320.0));
+        slots.insert("fills", Slot::new(760.0, 2900.0, 780.0, 320.0));
         // The history zone. The list of runs is wide because a run is a
         // sentence; the calendar is square because a month is.
-        slots.insert("runs", Slot::new(40.0, 3020.0, 790.0, 390.0));
-        slots.insert("calendar", Slot::new(860.0, 3020.0, 570.0, 390.0));
+        slots.insert("runs", Slot::new(40.0, 3320.0, 790.0, 390.0));
+        slots.insert("calendar", Slot::new(860.0, 3320.0, 570.0, 390.0));
         Self {
             // Opens on the market, not zoomed out to fit everything: eleven
             // cards at once is a map, not a screen.
@@ -329,8 +354,16 @@ impl Board {
         let Ok(saved) = serde_json::from_str::<BTreeMap<String, Slot>>(saved) else {
             return;
         };
+        // A layout saved before the strategy picture existed has the code
+        // card, and everything below the bot, where the picture and the
+        // shifted rows now go. Those keep this version's places; the rest of
+        // the person's arrangement is kept.
+        let before_shape = !saved.contains_key("shape");
         let ids: Vec<&'static str> = self.slots.keys().copied().collect();
         for id in ids {
+            if before_shape && MOVED_FOR_SHAPE.contains(&id) {
+                continue;
+            }
             if let Some(slot) = saved.get(id) {
                 // The size is this build's business, the position is the
                 // person's: a card that grew a row should still be the size
@@ -858,6 +891,7 @@ impl Board {
         for (index, id) in STAGES.iter().enumerate() {
             self.stage_card(ui, index, id, now);
         }
+        self.shape_card(ui);
         self.code_card(ui, now);
         self.log_card(ui);
         self.trip_card(ui);
@@ -1399,6 +1433,13 @@ impl Board {
         let mut on_chart = false;
         let ticks: Vec<(f64, f64)> = self.feed.history.iter().copied().collect();
         let tick_range = self.feed.range();
+        // The account's lines and trades, on the contract this chart shows.
+        let over = crate::marks::overlay(
+            &self.feed.instrument,
+            &self.account_data,
+            &self.bot.rows,
+            now,
+        );
 
         let (state, status) = match &self.history.status {
             Load::Ready if bars.len() >= 2 => (
@@ -1456,7 +1497,7 @@ impl Board {
             },
             |ui| {
                 let area = ui.max_rect();
-                if candles::draw(ui, area, &bars, live) {
+                if candles::draw(ui, area, &bars, live, &over) {
                     on_chart = chart_input(ui, area, "candles", &mut zoom, total, bars.len());
                     return;
                 }
@@ -1527,6 +1568,107 @@ impl Board {
             self.hover = None;
         }
         self.put("chart", slot);
+    }
+
+    /// What the strategy looks like: the price, the lines it compares the
+    /// price with, and where it acted.
+    fn shape_card(&mut self, ui: &mut egui::Ui) {
+        let mut slot = self.slot("shape");
+        let newest = self.bot.rows.last();
+        let run = newest.and_then(|row| self.past.runs.iter().find(|run| run.covers(&row.at)));
+        let since = run.and_then(|run| crate::time::unix_of(&run.started_at));
+        let name = run.map(|run| run.strategy.clone()).unwrap_or_default();
+        let ticks = shape::ticks(&self.bot.rows, shape::SHOWN, since);
+        let banded = shape::has_band(&ticks);
+        let settings = shape::settings(&self.bot.rows);
+        // A replayed tick is marked on the picture, so stepping the
+        // pipeline shows where on the chart that decision was made.
+        let focus = if self.replaying() {
+            self.shown().map(|(_, row)| row.at.clone())
+        } else {
+            None
+        };
+        let sentence = newest.and_then(shape::waiting_for);
+        let (state, status) = if ticks.len() < 2 {
+            (theme::State::Idle, "ยังไม่มี tick".to_string())
+        } else if banded {
+            (
+                theme::State::Ok,
+                if name.is_empty() {
+                    format!("{} tick ล่าสุด", ticks.len())
+                } else {
+                    format!("{name} · {} tick", ticks.len())
+                },
+            )
+        } else {
+            (theme::State::Idle, "กลยุทธ์ไม่ได้บอกเส้น".to_string())
+        };
+        let load = self.bot.audit_load.clone();
+        let (state, status) = stale_if_failed(&load, state, status);
+        card::show(
+            ui,
+            &mut slot,
+            "หน้าตากลยุทธ์ · มันดูเส้นอะไรอยู่",
+            &status,
+            state,
+            |ui| {
+                if ticks.len() < 2 {
+                    waiting(ui, &load, "tradebot --strategy ping_pong --dry-run");
+                    return;
+                }
+                if banded {
+                    // The rule, in the words a person would use, with the
+                    // strategy's own numbers in it.
+                    let window = settings
+                        .window
+                        .map(|w| format!("เฉลี่ย {w:.0} ราคาล่าสุด"))
+                        .unwrap_or_else(|| "ค่าเฉลี่ย".to_string());
+                    let edge = settings
+                        .edge_pct
+                        .map(|e| format!("ห่างเส้นกลาง {e}%"))
+                        .unwrap_or_else(|| "แถบ".to_string());
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "ราคาหลุดใต้แถบ = ซื้อ · ทะลุเหนือแถบ = ขาย · กลับมาแตะเส้นกลาง = ปิด \
+                             (เส้นกลาง = {window} · ขอบแถบ = {edge})"
+                        ))
+                        .size(11.0)
+                        .color(theme::TEXT),
+                    );
+                    ui.horizontal(|ui| {
+                        shape::legend(ui, theme::TEXT, false, "ราคา");
+                        shape::legend(ui, theme::INFO, false, "เส้นกลาง");
+                        shape::legend(ui, theme::INFO.gamma_multiply(0.3), true, "แถบที่ไม่ทำอะไร");
+                        shape::legend(ui, theme::BAD, false, "stop");
+                        shape::legend(ui, theme::OK, true, "ซื้อ");
+                        shape::legend(ui, theme::BAD, true, "ขาย/ปิด");
+                    });
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "กลยุทธ์ที่รันอยู่ไม่ได้บอกว่ามันดูเส้นไหน (ต้องมี chart() ในคลาส) \
+                             · เห็นแค่ราคากับจุดที่มันซื้อขาย · ping_pong บอกได้",
+                        )
+                        .size(11.0)
+                        .color(theme::MUTED),
+                    );
+                }
+                // Above the chart and wrapped: it is the sentence the
+                // student reads first, and a long one painted on a single
+                // line ran off the card (seen on the board, 16 Nov).
+                if let Some(sentence) = &sentence {
+                    ui.label(
+                        egui::RichText::new(format!("ตอนนี้: {sentence}"))
+                            .size(10.5)
+                            .color(theme::ACCENT),
+                    );
+                }
+                ui.add_space(4.0);
+                let area = ui.available_rect_before_wrap();
+                shape::draw(ui, area, &ticks, focus.as_deref());
+            },
+        );
+        self.put("shape", slot);
     }
 
     fn feed_card(&mut self, ui: &mut egui::Ui) {
@@ -1773,6 +1915,22 @@ impl Board {
             if self.bot.account.halted {
                 theme::State::Bad
             } else if has {
+                theme::State::Ok
+            } else {
+                theme::State::Idle
+            },
+        ));
+        out.push((
+            "shape",
+            if has
+                && self
+                    .bot
+                    .rows
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .any(|row| row.view.is_some())
+            {
                 theme::State::Ok
             } else {
                 theme::State::Idle
@@ -5156,6 +5314,143 @@ mod tests {
             walk(&clipped.shape, &mut found);
         }
         found
+    }
+
+    /// Ticks from a ping_pong run: flat, then a buy under the band, then
+    /// holding it.
+    fn ping_pong_rows() -> Vec<bot::Row> {
+        let view = |avg: f64| {
+            format!(
+                r#""view":{{"average":"{avg}","buy_below":"{}","sell_above":"{}","window":"12","edge_pct":"0.03","stop_pct":"0.4","max_hold_s":"180"}}"#,
+                avg * 0.9997,
+                avg * 1.0003
+            )
+        };
+        let mut rows: Vec<bot::Row> = (0..20)
+            .map(|i| {
+                serde_json::from_str(&format!(
+                    r#"{{"at":"2026-11-16T04:00:{i:02}+00:00","symbol":"BTC_USDT_Perp","price":"{}",{}}}"#,
+                    67000.0 + i as f64,
+                    view(67000.0 + i as f64)
+                ))
+                .unwrap()
+            })
+            .collect();
+        rows.push(
+            serde_json::from_str(&format!(
+                r#"{{"at":"2026-11-16T04:00:21+00:00","symbol":"BTC_USDT_Perp","price":"66980",{},
+                    "signal":{{"side":"buy","stop_price":"66712.1"}},
+                    "order":{{"side":"buy","limit_price":"66990","qty":"0.01"}},
+                    "receipt":{{"broker_order_id":"0x00"}}}}"#,
+                view(67010.0)
+            ))
+            .unwrap(),
+        );
+        rows.push(
+            serde_json::from_str(
+                r#"{"at":"2026-11-16T04:00:25+00:00","symbol":"BTC_USDT_Perp","price":"66995",
+                    "position":{"side":"buy","qty":"0.01","entry_price":"66988"},
+                    "view":{"average":"67008","buy_below":"66987.9","sell_above":"67028.1",
+                            "stop":"66720.0","held_s":"4","max_hold_s":"180","window":"12","edge_pct":"0.03"}}"#,
+            )
+            .unwrap(),
+        );
+        rows
+    }
+
+    /// The strategy picture explains the rule with the strategy's own
+    /// numbers, and says what it is waiting for right now.
+    #[test]
+    fn the_strategy_picture_says_the_rule_and_what_it_is_waiting_for() {
+        let mut board = Board::default();
+        board.bot.rows = ping_pong_rows();
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(painted.contains("หน้าตากลยุทธ์"), "{painted}");
+        assert!(painted.contains("เฉลี่ย 12 ราคาล่าสุด"), "{painted}");
+        assert!(painted.contains("ห่างเส้นกลาง 0.03%"), "{painted}");
+        assert!(
+            painted.contains("ตอนนี้: ถือซื้ออยู่ · ปิดเมื่อราคากลับถึงเส้นกลาง 67008.0"),
+            "{painted}"
+        );
+        assert!(painted.contains("ถือครบ 180 วิ (ผ่านไป 4)"), "{painted}");
+        assert!(painted.contains("ซื้อ"), "จุดที่ซื้อต้องมีป้าย");
+    }
+
+    /// A strategy that does not report its lines gets a picture of the
+    /// price and a sentence saying why there is nothing more - never a band
+    /// the board made up.
+    #[test]
+    fn a_strategy_without_lines_is_told_so_and_no_band_is_invented() {
+        let mut board = Board::default();
+        board.bot.rows = (0..5)
+            .map(|i| {
+                serde_json::from_str(&format!(
+                    r#"{{"at":"2026-11-16T04:00:0{i}+00:00","symbol":"BTC_USDT_Perp","price":"{}"}}"#,
+                    100 + i
+                ))
+                .unwrap()
+            })
+            .collect();
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(painted.contains("ไม่ได้บอกว่ามันดูเส้นไหน"), "{painted}");
+        assert!(!painted.contains("ตอนนี้:"), "{painted}");
+    }
+
+    /// A layout saved before the strategy picture existed would put the
+    /// code card straight on top of it. The cards that moved for it take
+    /// this version's places; everything else stays where it was dragged.
+    #[test]
+    fn an_old_layout_does_not_put_the_code_card_on_top_of_the_strategy_picture() {
+        let mut board = Board::default();
+        board.restore(
+            r#"{"market":{"x":5.0,"y":6.0,"w":1.0,"h":1.0},
+                "code":{"x":390.0,"y":1390.0,"w":560.0,"h":240.0},
+                "balance":{"x":40.0,"y":2320.0,"w":380.0,"h":260.0}}"#,
+        );
+        assert_eq!(board.slots["market"].x, 5.0, "ที่คนจัดไว้ต้องอยู่");
+        assert!(
+            !board.slots["code"]
+                .rect()
+                .intersects(board.slots["shape"].rect()),
+            "การ์ดโค้ดทับภาพกลยุทธ์"
+        );
+        assert_eq!(
+            board.slots["balance"].y,
+            Board::default().slots["balance"].y
+        );
+
+        // Once saved with the picture in it, the person's places win again.
+        let mut again = Board::default();
+        again.restore(
+            r#"{"shape":{"x":390.0,"y":1390.0,"w":1.0,"h":1.0},
+                "code":{"x":11.0,"y":12.0,"w":1.0,"h":1.0}}"#,
+        );
+        assert_eq!(again.slots["code"].x, 11.0);
+    }
+
+    /// No two cards start on top of each other.
+    #[test]
+    fn the_fresh_layout_has_no_card_on_top_of_another() {
+        let board = Board::default();
+        let slots: Vec<(&&str, &Slot)> = board.slots.iter().collect();
+        for (i, (a, sa)) in slots.iter().enumerate() {
+            for (b, sb) in &slots[i + 1..] {
+                assert!(!sa.rect().intersects(sb.rect()), "{a} ทับ {b}");
+            }
+        }
+    }
+
+    /// Every card sits inside the zone a jump button frames, or the button
+    /// takes a student to half a card.
+    #[test]
+    fn the_strategy_picture_and_the_code_are_inside_the_bot_zone() {
+        let board = Board::default();
+        for id in ["shape", "code"] {
+            assert!(
+                view(1).contains_rect(board.slots[id].rect()),
+                "{id} อยู่นอกโซนบอท"
+            );
+        }
     }
 
     /// A loss has to reach the screen wearing its minus sign.

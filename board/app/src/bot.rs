@@ -93,9 +93,24 @@ pub struct Row {
     /// instead; the board asks for the trace when it shows the tick.
     #[serde(default)]
     pub traced: bool,
+    /// The levels the strategy was watching on this tick, by name - its
+    /// average, its band, its stop - from `Strategy.chart`. Absent for a
+    /// strategy that does not draw and for rows written before bots could.
+    #[serde(default)]
+    pub view: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 impl Row {
+    /// One of the strategy's levels on this tick, if it gave it.
+    pub fn level(&self, key: &str) -> Option<f64> {
+        maybe_json(self.view.as_ref()?.get(key))
+    }
+
+    /// The price on this tick, or `None` for a tick that could not read one.
+    pub fn price_value(&self) -> Option<f64> {
+        maybe(&self.price).filter(|price| *price > 0.0)
+    }
+
     /// Did the bot record which lines this tick ran - whether or not that
     /// record has arrived yet?
     pub fn has_trace(&self) -> bool {

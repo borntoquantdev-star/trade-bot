@@ -194,6 +194,9 @@ class Engine:
         self.trace_enabled = trace
         self.trace_path = Path(trace_path) if trace_path else None
         self._trace = Trace(enabled=False)
+        # The market this tick was decided on, kept only so `_record` can
+        # ask the strategy what it was looking at (see `_view`).
+        self._market: MarketView | None = None
         # What this run has done so far, for the run log.  Counted here
         # rather than derived from the audit trail later, because the trail
         # is trimmed to its tail and a run from last week would come back
@@ -268,6 +271,7 @@ class Engine:
         # Recording which lines of this package ran, so the board can show
         # the path a tick really took instead of guessing it from the row it
         # left behind.  Off unless somebody asked for it.
+        self._market = None
         with Trace(enabled=self.trace_enabled) as self._trace:
             now = self.clock()
             symbol = self.config.trading.symbol
@@ -308,6 +312,7 @@ class Engine:
                 position=positions.get(symbol),
                 recent_prices=tuple(self.prices),
             )
+            self._market = market
 
             # Getting out comes before getting in, and never passes the risk
             # gate: the gate approves *taking* risk, and closing reduces it.  A
@@ -464,6 +469,7 @@ class Engine:
         could not be read, which is said in the log either way.
         """
         symbol = self.config.trading.symbol
+        self._market = None
         with Trace(enabled=self.trace_enabled) as self._trace:
             try:
                 positions = dict(self.broker.fetch_positions())
@@ -513,6 +519,25 @@ class Engine:
             self.log.info("new trading day %s, starting equity %s", today, equity)
         if self.state.peak_equity <= ZERO:
             self.state.peak_equity = equity
+
+    def _view(self) -> dict[str, str] | None:
+        """What the strategy was watching this tick, for the board to draw.
+
+        Asked after the tracer has stopped, so it never shows up as a line
+        the tick ran, and after the tick was decided, so it cannot change
+        what the bot did.  A strategy whose ``chart`` raises loses its
+        picture for that tick and nothing else.
+        """
+        if self._market is None:
+            return None
+        try:
+            levels = self.strategy.chart(self._market)
+        except Exception as exc:  # a drawing aid must never cost a tick
+            self.log.debug("strategy.chart raised: %r", exc)
+            return None
+        if not levels:
+            return None
+        return {key: format(D(value), "f") for key, value in levels.items()}
 
     def _count_error(self, message: str) -> None:
         self._consecutive_errors += 1
@@ -618,6 +643,9 @@ class Engine:
                 row["exit"]["venue_id"] = result.exit_receipt.venue_client_order_id
         if result.error:
             row["error"] = result.error
+        view = self._view()
+        if view:
+            row["view"] = view
         trace = self._trace.as_json()
         if trace is not None:
             if self.trace_path is None:

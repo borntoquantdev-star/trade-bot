@@ -156,5 +156,32 @@ class PingPongStrategy(Strategy):
             return entry_price * (ONE - self.stop_fraction)
         return entry_price * (ONE + self.stop_fraction)
 
+    # --- for the board -----------------------------------------------------
+
+    def chart(self, market: MarketView) -> dict[str, Decimal] | None:
+        """The average, the band either side of it, and the stop if holding.
+
+        The settings travel too, so the board can say "average of 12 prices,
+        0.03% either side" without knowing this class exists.
+        """
+        middle = self.average(market)
+        if middle is None or middle <= 0:
+            return None
+        view = {
+            "average": middle,
+            "buy_below": middle * (ONE - self.edge_fraction),
+            "sell_above": middle * (ONE + self.edge_fraction),
+            "window": D(self.window),
+            "edge_pct": self.edge_fraction * 100,
+            "stop_pct": self.stop_fraction * 100,
+            "max_hold_s": D(self.max_hold_seconds),
+        }
+        held = market.position
+        if held is not None:
+            view["stop"] = self.stop_price(held.side, held.entry_price)
+            if self._opened_at is not None and market.now is not None:
+                view["held_s"] = D(int((market.now - self._opened_at).total_seconds()))
+        return view
+
 
 __all__ = ["PingPongStrategy"]

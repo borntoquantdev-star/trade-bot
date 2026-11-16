@@ -144,6 +144,27 @@ If every signal is refused, `docs/README.th.md` and
 with that stop — which is a real answer, not a configuration problem to be
 tuned away.
 
+## Show the board what you are looking at (optional)
+
+Override `chart(market)` to return the price levels your rule compares the
+price with, as a dict of `Decimal`s. The engine writes it into each audit row
+as `view`, and the board's "strategy picture" card draws it under the
+strategy stage. The card draws four keys today: `average`, `buy_below`,
+`sell_above` and `stop`; other keys are recorded but not drawn yet.
+`ping_pong.py` is the worked example.
+
+```python
+def chart(self, market):
+    middle = self.average(market)
+    if middle is None:
+        return None
+    return {"average": middle, "buy_below": middle * D("0.999"), "sell_above": middle * D("1.001")}
+```
+
+It is only a drawing aid. It is called after the tick has been decided and
+outside the trace, an exception in it is swallowed, and nothing the bot does
+may depend on it. Keep it pure: read your state, never change it.
+
 ## The two that ship
 
 - **`random`** — a coin flip with a fixed stop. No edge; it exists to exercise

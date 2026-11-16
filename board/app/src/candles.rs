@@ -345,11 +345,60 @@ fn num(value: Option<&serde_json::Value>) -> Option<f64> {
     parsed.is_finite().then_some(parsed)
 }
 
+/// A price the account is committed to, drawn across the candles: an order
+/// waiting in the book, the price a position was opened at, its stop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Level {
+    pub price: f64,
+    pub colour: Color32,
+    /// Dashed for a price that has not traded yet (an order still waiting,
+    /// a stop), solid for one that has (the entry).
+    pub dashed: bool,
+    pub label: String,
+}
+
+/// A moment the account traded, pinned to the bar it happened in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mark {
+    /// Unix seconds.
+    pub unix: f64,
+    pub price: f64,
+    pub is_buy: bool,
+}
+
+/// Everything drawn over the candles that is not a candle.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Overlay {
+    pub levels: Vec<Level>,
+    pub marks: Vec<Mark>,
+}
+
+/// Which bar a moment falls in, by the bars' own open times.
+///
+/// `None` before the first bar, and after the last bar has closed: a trade
+/// from outside the bars on screen belongs to no candle, and pinning it to
+/// the nearest one would draw it at a time it did not happen.
+pub fn bar_of(rows: &[Candle], unix: f64) -> Option<usize> {
+    let opens: Vec<f64> = rows
+        .iter()
+        .map(|row| crate::time::unix_of(&row.at))
+        .collect::<Option<Vec<f64>>>()?;
+    if opens.len() < 2 || unix < opens[0] {
+        return None;
+    }
+    let width = opens[opens.len() - 1] - opens[opens.len() - 2];
+    let index = opens.iter().rposition(|open| *open <= unix)?;
+    if index == opens.len() - 1 && unix >= opens[index] + width {
+        return None;
+    }
+    Some(index)
+}
+
 /// How much of the card's width the price axis takes.
 const AXIS: f32 = 62.0;
 
 /// Draw the candles. Returns false when there was nothing to draw.
-pub fn draw(ui: &Ui, area: Rect, rows: &[Candle], live: Option<f64>) -> bool {
+pub fn draw(ui: &Ui, area: Rect, rows: &[Candle], live: Option<f64>, over: &Overlay) -> bool {
     if rows.len() < 2 || area.width() < AXIS + 40.0 || area.height() < 40.0 {
         return false;
     }
@@ -361,7 +410,9 @@ pub fn draw(ui: &Ui, area: Rect, rows: &[Candle], live: Option<f64>) -> bool {
         lo = lo.min(row.low);
         hi = hi.max(row.high);
     }
-    if let Some(price) = live {
+    // Every line the account is committed to stays on the chart: a stop
+    // drawn off the top edge is a stop nobody knows is there.
+    for price in live.into_iter().chain(over.levels.iter().map(|l| l.price)) {
         lo = lo.min(price);
         hi = hi.max(price);
     }
@@ -423,6 +474,71 @@ pub fn draw(ui: &Ui, area: Rect, rows: &[Candle], live: Option<f64>) -> bool {
             egui::pos2(x + body / 2.0, bottom.max(top + 1.0)),
         );
         painter.rect_filled(rect, 1, colour);
+    }
+
+    // The account's own prices, over the candles and under the live price.
+    for level in &over.levels {
+        let y = y_of(level.price);
+        if level.dashed {
+            dashed_hline(ui, plot.x_range(), y, level.colour);
+        } else {
+            painter.hline(plot.x_range(), y, Stroke::new(1.5, level.colour));
+        }
+        tag(
+            ui,
+            egui::pos2(plot.max.x + 2.0, y),
+            &fmt_price(level.price, span),
+            theme::CANVAS,
+            level.colour,
+        );
+        // The words sit on the left, where no price tag is.
+        let galley = painter.layout_no_wrap(
+            level.label.clone(),
+            FontId::proportional(10.5),
+            theme::CANVAS,
+        );
+        let at = egui::pos2(
+            plot.min.x + 4.0,
+            (y - galley.size().y - 2.0).max(plot.min.y),
+        );
+        let back = Rect::from_min_size(at, galley.size()).expand2(egui::vec2(3.0, 1.0));
+        painter.rect_filled(back, 2, level.colour);
+        painter.galley(at, galley, theme::CANVAS);
+    }
+
+    // Where it traded: an upward triangle under a buy, a downward one over a
+    // sell, its point on the price it traded at.
+    for mark in &over.marks {
+        let Some(index) = bar_of(rows, mark.unix) else {
+            continue;
+        };
+        let x = plot.min.x + step * (index as f32 + 0.5);
+        let y = y_of(mark.price);
+        let size = 6.0;
+        let (points, colour) = if mark.is_buy {
+            (
+                vec![
+                    egui::pos2(x, y),
+                    egui::pos2(x + size, y + size * 1.6),
+                    egui::pos2(x - size, y + size * 1.6),
+                ],
+                theme::OK,
+            )
+        } else {
+            (
+                vec![
+                    egui::pos2(x, y),
+                    egui::pos2(x - size, y - size * 1.6),
+                    egui::pos2(x + size, y - size * 1.6),
+                ],
+                theme::BAD,
+            )
+        };
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            colour,
+            Stroke::new(1.0, theme::CANVAS),
+        ));
     }
 
     // The live price: a dashed rule and a tag on the axis. Cream, because a
@@ -571,6 +687,24 @@ mod tests {
         assert!(history.rows.is_empty(), "แท่งของ 5m ต้องไม่ค้างอยู่บนกราฟ 1h");
         assert_eq!(history.source, None);
         assert_eq!(history.interval, "1h");
+    }
+
+    #[test]
+    fn a_trade_lands_on_the_bar_it_happened_in() {
+        let bars: Vec<Candle> = ["2026-11-16T04:00:00+00:00", "2026-11-16T04:05:00+00:00"]
+            .iter()
+            .map(|at| Candle {
+                at: at.to_string(),
+                ..row(1.0, 2.0)
+            })
+            .collect();
+        let start = crate::time::unix_of("2026-11-16T04:00:00+00:00").unwrap();
+        assert_eq!(bar_of(&bars, start - 1.0), None, "ก่อนแท่งแรกไม่อยู่ในแท่งไหน");
+        assert_eq!(bar_of(&bars, start), Some(0));
+        assert_eq!(bar_of(&bars, start + 299.0), Some(0));
+        assert_eq!(bar_of(&bars, start + 300.0), Some(1));
+        assert_eq!(bar_of(&bars, start + 599.0), Some(1), "แท่งล่าสุดยังไม่ปิด");
+        assert_eq!(bar_of(&bars, start + 600.0), None, "หลังแท่งล่าสุดปิดไม่ใช่แท่งนี้");
     }
 
     #[test]

@@ -166,3 +166,38 @@ def test_prices_stay_decimal_all_the_way_through() -> None:
     middle = strategy.average(view("100", ["100.1", "99.9", "100.2", "99.8"]))
     assert isinstance(middle, Decimal)
     assert middle == D("100")
+
+
+def test_the_chart_shows_the_average_and_the_band_it_trades_across() -> None:
+    strategy = PingPongStrategy(window=20, edge_pct="0.05", stop_pct="0.4")
+    drawn = strategy.chart(view("100", flat(20)))
+    assert drawn is not None
+    assert drawn["average"] == D("100")
+    assert drawn["buy_below"] == D("99.95")
+    assert drawn["sell_above"] == D("100.05")
+    assert drawn["window"] == 20 and drawn["edge_pct"] == D("0.05")
+    assert "stop" not in drawn, "no position, no stop to draw"
+
+
+def test_the_chart_draws_the_stop_of_the_position_it_is_in() -> None:
+    strategy = PingPongStrategy(window=20, edge_pct="0.05", stop_pct="0.4")
+    drawn = strategy.chart(view("99", flat(20), position=long_at("100")))
+    assert drawn is not None
+    assert drawn["stop"] == D("99.6")
+    drawn = strategy.chart(view("101", flat(20), position=short_at("100")))
+    assert drawn is not None
+    assert drawn["stop"] == D("100.4")
+
+
+def test_the_chart_has_nothing_to_draw_before_the_window_fills() -> None:
+    assert PingPongStrategy(window=20).chart(view("100", flat(19))) is None
+
+
+def test_drawing_the_chart_does_not_start_the_holding_clock() -> None:
+    strategy = PingPongStrategy(window=20, max_hold_seconds=60)
+    strategy.chart(view("100", flat(20), position=long_at("100")))
+    assert strategy._opened_at is None
+    strategy.get_exit(view("99.9", flat(20, "100"), position=long_at("100")))
+    later = NOW + timedelta(seconds=45)
+    drawn = strategy.chart(view("99.9", flat(20), position=long_at("100"), at=later))
+    assert drawn is not None and drawn["held_s"] == 45

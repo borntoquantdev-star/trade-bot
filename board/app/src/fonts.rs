@@ -50,7 +50,7 @@ mod tests {
 
     /// Thai from every card, so a label added later that uses a character
     /// this font happens to lack cannot slip through.
-    const LABELS: [&str; 8] = [
+    const LABELS: [&str; 10] = [
         "ทุนกับสถานะบอท",
         "ทางที่การตัดสินใจเดิน",
         "สิ่งที่บอทตัดสินใจ",
@@ -59,6 +59,8 @@ mod tests {
         "เส้นทุน · แรเงาคือช่วงใต้พีค",
         "อ่านก่อนเชื่อผลนี้",
         "วัดไม่ได้ · ปฏิเสธ · ซื้อแล้วถือ · ค่าธรรมเนียม",
+        "หน้าตากลยุทธ์ · มันดูเส้นอะไรอยู่ · เส้นกลาง · แถบที่ไม่ทำอะไร",
+        "รอจับคู่ · ถือ ซื้อ · stop · ตัดขาดทุนที่นี่ · ยังไม่ปิด",
     ];
 
     /// Every non-ASCII symbol the cards print. A character with no glyph is

@@ -20,6 +20,8 @@ pub mod fonts;
 pub mod history;
 pub mod journey;
 pub mod market;
+pub mod marks;
+pub mod shape;
 pub mod store;
 pub mod theme;
 pub mod time;

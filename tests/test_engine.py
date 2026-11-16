@@ -257,6 +257,41 @@ def test_the_audit_trail_records_decisions(tmp_path):
     assert all("at" in row and "price" in row for row in lines)
 
 
+class ChartingStrategy(ScriptedStrategy):
+    """Draws one line, or raises while drawing it."""
+
+    def __init__(self, breaks: bool = False):
+        super().__init__(side=None)
+        self.breaks = breaks
+
+    def chart(self, market: MarketView):
+        if self.breaks:
+            raise RuntimeError("the pen ran out")
+        return {"average": market.price - 1}
+
+
+def test_the_audit_row_carries_what_the_strategy_was_looking_at(tmp_path):
+    engine, _, _ = make_engine(tmp_path, strategy=ChartingStrategy())
+    engine.tick()
+    row = json.loads((tmp_path / "audit.jsonl").read_text().splitlines()[0])
+    assert row["view"] == {"average": "99999"}
+
+
+def test_a_strategy_that_cannot_draw_still_trades_and_writes_its_row(tmp_path):
+    engine, _, _ = make_engine(tmp_path, strategy=ChartingStrategy(breaks=True))
+    result = engine.tick()
+    assert result.error is None
+    row = json.loads((tmp_path / "audit.jsonl").read_text().splitlines()[0])
+    assert "view" not in row
+
+
+def test_a_strategy_with_nothing_to_draw_adds_no_view(tmp_path):
+    engine, _, _ = make_engine(tmp_path, strategy=ScriptedStrategy(side=None))
+    engine.tick()
+    row = json.loads((tmp_path / "audit.jsonl").read_text().splitlines()[0])
+    assert "view" not in row
+
+
 def test_a_new_day_resets_the_daily_budget(tmp_path):
     engine, broker, ticks = make_engine(tmp_path)
     engine.tick()

@@ -132,3 +132,20 @@ class Strategy(ABC):
 
     def __repr__(self) -> str:
         return f"{self.name}()"
+
+    # --- for the board ---------------------------------------------------
+
+    def chart(self, market: MarketView) -> dict[str, Decimal] | None:
+        """The levels this strategy is watching right now, or ``None``.
+
+        Only for drawing: the engine writes the answer into the audit row as
+        ``view`` and the board draws it under the strategy card, so a student
+        sees the lines the strategy compared the price with rather than a
+        guess at them.  Nothing the bot does may depend on it, which is why it
+        is asked after the tick has been decided and why an exception here is
+        swallowed.  Keep it pure and cheap; do not touch strategy state.
+
+        Price levels are drawn as lines.  Well-known keys get their own style
+        on the board: ``average``, ``buy_below``, ``sell_above``, ``stop``.
+        """
+        return None
