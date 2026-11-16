@@ -168,6 +168,9 @@ pub struct Order {
     pub reject: String,
     pub is_market: bool,
     pub reduce_only: bool,
+    pub post_only: bool,
+    /// `GOOD_TILL_TIME` and friends, as GRVT spells them.
+    pub time_in_force: String,
     pub client_order_id: String,
     pub at: String,
     /// The exchange's own id, once it has given one.
@@ -185,6 +188,18 @@ impl Order {
             "ซื้อ"
         } else {
             "ขาย"
+        }
+    }
+
+    /// The time in force the way the exchange's own screen abbreviates it.
+    pub fn time_in_force_short(&self) -> &str {
+        match self.time_in_force.as_str() {
+            "GOOD_TILL_TIME" => "GTT",
+            "IMMEDIATE_OR_CANCEL" => "IOC",
+            "FILL_OR_KILL" => "FOK",
+            "ALL_OR_NONE" => "AON",
+            "" => "-",
+            other => other,
         }
     }
 
@@ -209,6 +224,11 @@ pub struct Fill {
     pub realized: Option<Num>,
     pub currency: String,
     pub at: String,
+    /// The index and the mark when it traded: what the exchange measured
+    /// the fill against.
+    pub index_price: Option<Num>,
+    pub mark_price: Option<Num>,
+    pub trade_id: String,
     /// Which order this trade filled: the bot's id for it, and the exchange's.
     pub client_order_id: String,
     pub order_id: String,
@@ -251,16 +271,36 @@ pub struct Closed {
     pub status: String,
     pub opened_at: String,
     pub closed_at: String,
+    pub leverage: Option<Num>,
+    pub margin_type: String,
+    /// The most margin the position ever tied up: what GRVT divides by
+    /// for its ROE.
+    pub margin: Option<Num>,
+    /// The biggest the position got, in the base asset.
+    pub max_size: Option<Num>,
 }
 
 impl Closed {
     /// What the trade made after what it cost to make it.
     ///
-    /// `realized_pnl` already has the fees out of it on GRVT, so this is not
-    /// a subtraction - it is here to be named, because "I made 12 dollars"
-    /// and "I made 12 dollars and paid 9 in fees" are different lessons.
+    /// `realized_pnl` on a closed position is the price difference **before**
+    /// fees; the fees are in `cumulative_fee`. GRVT's own Position History
+    /// prints the two subtracted (checked row by row on 16 Nov: -10.11 and
+    /// 8.723659 in fees is its -18.8336), and so does this. An earlier
+    /// version took `realized_pnl` to have the fees out already and showed
+    /// every closed trade 8-9 dollars better than it was.
+    ///
+    /// Funding is left as GRVT left it: every closed position so far has
+    /// paid none, so how it enters this figure has not been seen.
     pub fn after_costs(&self) -> Option<f64> {
-        Some(self.realized.as_ref()?.value)
+        let fees = self.fees.as_ref().map(|fee| fee.value).unwrap_or(0.0);
+        Some(self.realized.as_ref()?.value - fees)
+    }
+
+    /// Return on the margin it tied up, in percent - GRVT's ROE column.
+    pub fn roe(&self) -> Option<f64> {
+        let margin = self.margin.as_ref()?.value;
+        (margin > 0.0).then(|| self.after_costs().unwrap_or(0.0) / margin * 100.0)
     }
 
     /// Fees as a share of what the trade made or lost, when both are known.
@@ -368,6 +408,8 @@ pub fn read_orders(result: &Value) -> Vec<Order> {
                 reject: text_of(state.and_then(|state| state.get("reject_reason"))),
                 is_market: flag_of(row.get("is_market")),
                 reduce_only: flag_of(row.get("reduce_only")),
+                post_only: flag_of(row.get("post_only")),
+                time_in_force: text_of(row.get("time_in_force")),
                 client_order_id: text_of(meta.and_then(|meta| meta.get("client_order_id"))),
                 at: stamp(&text_of(meta.and_then(|meta| meta.get("create_time_at")))),
                 order_id: text_of(row.get("order_id")),
@@ -392,6 +434,9 @@ pub fn read_fills(result: &Value) -> Vec<Fill> {
             realized: Num::from(row.get("realized_pnl")),
             currency: text_of(row.get("fee_currency")),
             at: stamp(&text_of(row.get("event_time_at"))),
+            index_price: Num::from(row.get("index_price")),
+            mark_price: Num::from(row.get("mark_price")),
+            trade_id: text_of(row.get("trade_id")),
             client_order_id: text_of(row.get("client_order_id")),
             order_id: text_of(row.get("order_id")),
             when: nanos_of(row.get("event_time")),
@@ -426,6 +471,10 @@ pub fn read_closed(result: &Value) -> Vec<Closed> {
             status: text_of(row.get("status")),
             opened_at: stamp(&text_of(row.get("open_time_at"))),
             closed_at: stamp(&text_of(row.get("close_time_at"))),
+            leverage: Num::from(row.get("leverage")),
+            margin_type: text_of(row.get("margin_type")),
+            margin: Num::from(row.get("max_initial_margin")),
+            max_size: Num::from(row.get("max_open_interest_base")),
         })
         .collect()
 }
@@ -789,7 +838,7 @@ mod tests {
         }]));
         let closed = &rows[0];
         assert!(!closed.is_long);
-        assert_eq!(closed.after_costs(), Some(-17.7915));
+        assert!((closed.after_costs().unwrap() - (-17.7915 - 8.975182)).abs() < 1e-9);
         assert_eq!(closed.opened_at, "2026-11-13 16:00:50", "เวลาไทย = UTC+7");
         // Fees were half the loss: the lesson the demo strategy exists to teach.
         let share = closed.fee_share().unwrap();

@@ -71,7 +71,7 @@ const WIRES: [(&str, &str); 7] = [
 ];
 
 /// The cards that moved down to make room for the strategy picture.
-const MOVED_FOR_SHAPE: [&str; 14] = [
+const MOVED_FOR_SHAPE: [&str; 12] = [
     "code",
     "backtest",
     "quality",
@@ -80,13 +80,16 @@ const MOVED_FOR_SHAPE: [&str; 14] = [
     "balance",
     "positions",
     "open_orders",
-    "orders",
     "paid_funding",
-    "closed",
-    "fills",
+    "ledger",
     "runs",
     "calendar",
 ];
+
+/// The cards that moved when the three history cards became one: funding
+/// went up into the row the order history had, where the ledger would
+/// otherwise sit on it.
+const MOVED_FOR_LEDGER: [&str; 1] = ["paid_funding"];
 
 /// ASCII names for the zones, in the same order as `VIEWS`, for a link or
 /// an environment variable - places where typing Thai is a nuisance.
@@ -244,6 +247,8 @@ pub struct Board {
     /// board that slides out from under the chart being zoomed is not.
     hover: Option<(Chart, usize)>,
     started: bool,
+    /// Which tab of the account history is open.
+    ledger_tab: Ledger,
 }
 
 /// The two charts that can be zoomed.
@@ -302,12 +307,10 @@ impl Default for Board {
         slots.insert("balance", Slot::new(40.0, 2620.0, 380.0, 260.0));
         slots.insert("positions", Slot::new(440.0, 2620.0, 540.0, 260.0));
         slots.insert("open_orders", Slot::new(1000.0, 2620.0, 540.0, 260.0));
-        // As tall as its row now, to make room under it for the funding
-        // the account actually paid; it scrolls, so nothing is lost.
-        slots.insert("orders", Slot::new(1560.0, 2620.0, 540.0, 260.0));
-        slots.insert("paid_funding", Slot::new(1560.0, 2900.0, 540.0, 320.0));
-        slots.insert("closed", Slot::new(40.0, 2900.0, 700.0, 320.0));
-        slots.insert("fills", Slot::new(760.0, 2900.0, 780.0, 320.0));
+        slots.insert("paid_funding", Slot::new(1560.0, 2620.0, 540.0, 260.0));
+        // The history, the full width of the zone: GRVT's own tables are
+        // a dozen columns wide, and a dozen columns need the room.
+        slots.insert("ledger", Slot::new(40.0, 2900.0, 2060.0, 320.0));
         // The history zone. The list of runs is wide because a run is a
         // sentence; the calendar is square because a month is.
         slots.insert("runs", Slot::new(40.0, 3320.0, 790.0, 390.0));
@@ -329,6 +332,7 @@ impl Default for Board {
             code: Code::default(),
             // The strategy, because it is the stage a person is most often
             // trying to understand and the only one they wrote themselves.
+            ledger_tab: Ledger::default(),
             code_stage: 1,
             code_pick: 0,
             code_at: None,
@@ -372,9 +376,13 @@ impl Board {
         // shifted rows now go. Those keep this version's places; the rest of
         // the person's arrangement is kept.
         let before_shape = !saved.contains_key("shape");
+        let before_ledger = !saved.contains_key("ledger");
         let ids: Vec<&'static str> = self.slots.keys().copied().collect();
         for id in ids {
             if before_shape && MOVED_FOR_SHAPE.contains(&id) {
+                continue;
+            }
+            if before_ledger && MOVED_FOR_LEDGER.contains(&id) {
                 continue;
             }
             if let Some(slot) = saved.get(id) {
@@ -915,9 +923,7 @@ impl Board {
         self.balance_card(ui);
         self.positions_card(ui);
         self.open_orders_card(ui);
-        self.orders_card(ui);
-        self.closed_card(ui);
-        self.fills_card(ui);
+        self.ledger_card(ui);
         self.paid_funding_card(ui);
         self.runs_card(ui);
         self.calendar_card(ui);
@@ -4155,185 +4161,88 @@ impl Board {
         self.put("open_orders", slot);
     }
 
-    /// Every order the account sent, filled or not.
-    fn orders_card(&mut self, ui: &mut egui::Ui) {
-        let mut slot = self.slot("orders");
-        let orders = self.account_data.orders.clone();
-        let load = self.account_data.load_of(Acc::Orders).clone();
-        let state = if orders.is_empty() {
+    /// The account's history as the exchange keeps it, one tab per list -
+    /// the same three tabs and the same columns as GRVT's own page, so a
+    /// student can hold the board up against the website and find every
+    /// row in both.
+    fn ledger_card(&mut self, ui: &mut egui::Ui) {
+        let mut slot = self.slot("ledger");
+        let tab = self.ledger_tab;
+        let data = &self.account_data;
+        let (rows, kind) = match tab {
+            Ledger::Orders => (data.orders.len(), Acc::Orders),
+            Ledger::Trades => (data.fills.len(), Acc::Fills),
+            Ledger::Positions => (data.closed.len(), Acc::Closed),
+        };
+        let load = data.load_of(kind).clone();
+        let state = if rows == 0 {
             theme::State::Idle
         } else {
             theme::State::Ok
         };
-        let status = if orders.is_empty() {
+        let status = if rows == 0 {
             "ยังไม่มี".to_string()
         } else {
-            format!("{} ใบล่าสุด", orders.len())
+            match tab {
+                Ledger::Orders => format!("{rows} ใบล่าสุด"),
+                // The demo strategy loses to fees by design; the total is
+                // the number that proves it rather than asserts it.
+                Ledger::Trades => {
+                    let fees: f64 = data
+                        .fills
+                        .iter()
+                        .filter_map(|fill| fill.fee.as_ref().map(|fee| fee.value))
+                        .sum();
+                    format!("{rows} ครั้ง · ค่าธรรมเนียมรวม {fees:.4}")
+                }
+                Ledger::Positions => {
+                    let total: f64 = data.closed.iter().filter_map(|row| row.after_costs()).sum();
+                    format!("{rows} ไม้ · รวม {}", bot::signed(total))
+                }
+            }
         };
         let (state, status) = stale_if_failed(&load, state, status);
-        card::show(
+        let (heads, table_rows) = match tab {
+            Ledger::Orders => (ORDER_HEADS.as_slice(), order_rows(&data.orders)),
+            Ledger::Trades => (TRADE_HEADS.as_slice(), trade_rows(&data.fills)),
+            Ledger::Positions => (POSITION_HEADS.as_slice(), position_rows(&data.closed)),
+        };
+        let mut pick = None;
+        card::show_with_tools(
             ui,
             &mut slot,
-            "ประวัติออเดอร์ · จากตลาด",
+            "ประวัติบัญชี · จากตลาด",
             &status,
             state,
             |ui| {
-                if orders.is_empty() {
-                    Self::no_account(ui, &load);
-                    return;
+                for (each, label) in LEDGER_TABS {
+                    if chip(ui, label, tab == each) {
+                        pick = Some(each);
+                    }
                 }
-                columns(ui, "วันที่ เวลา", "ราคา", "สถานะ");
-                ui.spacing_mut().item_spacing.y = 0.0;
-                egui::ScrollArea::vertical()
-                    .id_salt("orders")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for order in &orders {
-                            // The status is what this card exists for: an order
-                            // the exchange refused looks exactly like one it
-                            // filled, right up until you read this column.
-                            let colour = match order.status.as_str() {
-                                "FILLED" => theme::OK,
-                                "REJECTED" | "CANCELLED" => theme::BAD,
-                                _ => theme::MUTED,
-                            };
-                            let price = if order.is_market {
-                                format!("ตลาด {}", opt_text(&order.avg_price))
-                            } else {
-                                opt_text(&order.price)
-                            };
-                            trade_row(
-                                ui,
-                                &format!("{} {}", order.at, order.side()),
-                                &price,
-                                &status_label(order),
-                                colour,
-                            );
-                        }
-                    });
             },
-        );
-        self.put("orders", slot);
-    }
-
-    /// Positions that are over, with what they made and what they cost.
-    fn closed_card(&mut self, ui: &mut egui::Ui) {
-        let mut slot = self.slot("closed");
-        let rows = self.account_data.closed.clone();
-        let load = self.account_data.load_of(Acc::Closed).clone();
-        let total: f64 = rows.iter().filter_map(|row| row.after_costs()).sum();
-        let state = if rows.is_empty() {
-            theme::State::Idle
-        } else {
-            theme::State::Ok
-        };
-        let status = if rows.is_empty() {
-            "ยังไม่มี".to_string()
-        } else {
-            format!("{} ไม้ · รวม {}", rows.len(), bot::signed(total))
-        };
-        let (state, status) = stale_if_failed(&load, state, status);
-        card::show(
-            ui,
-            &mut slot,
-            "ไม้ที่ปิดไปแล้ว · กำไรขาดทุนจริง",
-            &status,
-            state,
             |ui| {
-                if rows.is_empty() {
+                if rows == 0 {
                     Self::no_account(ui, &load);
                     return;
                 }
-                columns(ui, "ปิดเมื่อ", "เข้า / ออก", "ได้เท่าไร");
-                ui.spacing_mut().item_spacing.y = 0.0;
-                egui::ScrollArea::vertical()
-                    .id_salt("closed")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for row in &rows {
-                            let pnl = row.after_costs().unwrap_or(0.0);
-                            let side = if row.is_long {
-                                "ซื้อ"
-                            } else {
-                                "ขาย"
-                            };
-                            trade_row(
-                                ui,
-                                &format!("{} {}", row.closed_at, side),
-                                &format!("{} / {}", opt_text(&row.entry), opt_text(&row.exit)),
-                                &bot::signed(pnl),
-                                bot::pnl_colour(pnl),
-                            );
-                        }
-                    });
-            },
-        );
-        self.put("closed", slot);
-    }
-
-    /// What the trading cost, fill by fill.
-    ///
-    /// The demo strategy loses to fees by design, and this is the card that
-    /// proves it rather than asserting it: the fee column against the money
-    /// column, in the same currency.
-    fn fills_card(&mut self, ui: &mut egui::Ui) {
-        let mut slot = self.slot("fills");
-        let fills = self.account_data.fills.clone();
-        let load = self.account_data.load_of(Acc::Fills).clone();
-        let fees: f64 = fills
-            .iter()
-            .filter_map(|fill| fill.fee.as_ref().map(|fee| fee.value))
-            .sum();
-        let state = if fills.is_empty() {
-            theme::State::Idle
-        } else {
-            theme::State::Ok
-        };
-        let status = if fills.is_empty() {
-            "ยังไม่มี".to_string()
-        } else {
-            format!("{} ครั้ง · รวม {:.4}", fills.len(), fees)
-        };
-        let (state, status) = stale_if_failed(&load, state, status);
-        card::show(
-            ui,
-            &mut slot,
-            "ค่าธรรมเนียมที่จ่ายจริง",
-            &status,
-            state,
-            |ui| {
-                if fills.is_empty() {
-                    Self::no_account(ui, &load);
-                    return;
+                if tab == Ledger::Positions {
+                    ui.label(
+                        egui::RichText::new(
+                            "กำไรขาดทุนจริง = ส่วนต่างราคา (realized_pnl) ลบค่าธรรมเนียมทั้งไม้ \
+                             · คิดแบบเดียวกับหน้า Position History ของ GRVT",
+                        )
+                        .size(10.0)
+                        .color(theme::FAINT),
+                    );
                 }
-                columns(ui, "วันที่ เวลา", "ราคา x จำนวน", "ค่าธรรมเนียม");
-                ui.spacing_mut().item_spacing.y = 0.0;
-                egui::ScrollArea::vertical()
-                    .id_salt("fills")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for fill in &fills {
-                            // Taker pays more than maker, and on this account
-                            // every fill is a taker fill, which is itself worth
-                            // noticing.
-                            let taker = if fill.is_taker {
-                                "จ่ายสเปรด"
-                            } else {
-                                "ตั้งรอ"
-                            };
-                            let colour = if fill.is_buy { theme::OK } else { theme::BAD };
-                            trade_row(
-                                ui,
-                                &format!("{} {}", fill.at, taker),
-                                &format!("{} x {}", opt_text(&fill.price), opt_text(&fill.size)),
-                                &format!("{} ({}%)", opt_text(&fill.fee), opt_text(&fill.fee_rate)),
-                                colour,
-                            );
-                        }
-                    });
+                table(ui, tab.salt(), heads, &table_rows);
             },
         );
-        self.put("fills", slot);
+        if let Some(each) = pick {
+            self.ledger_tab = each;
+        }
+        self.put("ledger", slot);
     }
 
     /// The limits of the number above. On the screen, not in a footnote.
@@ -4932,6 +4841,375 @@ fn short(text: &str, limit: usize) -> String {
 ///
 /// A dash, never a zero: "0.0" and "the exchange did not say" are different
 /// facts, and on a money card the difference matters.
+/// Which list the account history card is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ledger {
+    #[default]
+    Orders,
+    Trades,
+    Positions,
+}
+
+impl Ledger {
+    fn salt(self) -> &'static str {
+        match self {
+            Ledger::Orders => "ledger-orders",
+            Ledger::Trades => "ledger-trades",
+            Ledger::Positions => "ledger-positions",
+        }
+    }
+}
+
+/// The tabs, named the way GRVT names them as well, because the website is
+/// what the board gets checked against.
+const LEDGER_TABS: [(Ledger, &str); 3] = [
+    (Ledger::Orders, "ออเดอร์ (Order History)"),
+    (Ledger::Trades, "เทรด (Trade History)"),
+    (Ledger::Positions, "ไม้ที่ปิด (Position History)"),
+];
+
+/// Column headings and their share of the width, in GRVT's order.
+const ORDER_HEADS: [(&str, f32); 12] = [
+    ("วันที่ เวลา", 1.1),
+    ("สัญญา", 0.8),
+    ("ฝั่ง", 0.6),
+    ("ราคาที่ตั้ง", 1.0),
+    ("จำนวน", 0.9),
+    ("ราคาที่ได้", 1.0),
+    ("ได้แล้ว", 0.9),
+    ("สถานะ", 1.2),
+    ("ชนิด", 0.7),
+    ("อายุคำสั่ง", 0.7),
+    ("reduce-only", 0.8),
+    ("post-only", 0.7),
+];
+
+const TRADE_HEADS: [(&str, f32); 11] = [
+    ("วันที่ เวลา", 1.1),
+    ("สัญญา", 0.8),
+    ("ฝั่ง", 0.6),
+    ("ราคาที่ได้", 1.0),
+    ("จำนวน", 0.9),
+    ("มูลค่า", 1.0),
+    ("กำไรขาดทุน", 1.0),
+    ("ค่าธรรมเนียม", 1.2),
+    ("ราคา index", 1.0),
+    ("ราคา mark", 1.0),
+    ("Trade ID", 1.1),
+];
+
+const POSITION_HEADS: [(&str, f32); 11] = [
+    ("ปิดเมื่อ", 1.1),
+    ("สัญญา", 1.0),
+    ("กำไรขาดทุนจริง", 1.1),
+    ("ROE", 0.7),
+    ("จำนวนที่ปิด", 0.9),
+    ("ถือสูงสุด", 0.9),
+    ("ราคาเข้า", 1.0),
+    ("ราคาออกเฉลี่ย", 1.0),
+    ("ค่าธรรมเนียม", 0.9),
+    ("funding", 0.8),
+    ("เปิดเมื่อ", 1.1),
+];
+
+/// One cell of a history table: one line, or two stacked the way GRVT
+/// stacks a date over its time.
+struct Cell {
+    top: String,
+    under: Option<String>,
+    colour: egui::Color32,
+}
+
+impl Cell {
+    fn one(text: impl Into<String>, colour: egui::Color32) -> Self {
+        Self {
+            top: text.into(),
+            under: None,
+            colour,
+        }
+    }
+
+    fn two(top: impl Into<String>, under: impl Into<String>, colour: egui::Color32) -> Self {
+        Self {
+            top: top.into(),
+            under: Some(under.into()),
+            colour,
+        }
+    }
+
+    /// `2026-11-16 12:18:06` as the date over the time.
+    fn when(stamp: &str) -> Self {
+        match stamp.split_once(' ') {
+            Some((date, clock)) => Self::two(date, clock, theme::MUTED),
+            None => Self::one(stamp, theme::MUTED),
+        }
+    }
+}
+
+/// Tall enough for two lines of 10-pixel text and the gap between rows.
+const TABLE_ROW: f32 = 30.0;
+
+/// A history table: headings, then rows that scroll under them. Each cell
+/// is clipped to its column, so a long number is cut short rather than
+/// printed over its neighbour.
+fn table(ui: &mut egui::Ui, salt: &str, heads: &[(&str, f32)], rows: &[Vec<Cell>]) {
+    let width = ui.available_width();
+    let total: f32 = heads.iter().map(|(_, share)| share).sum();
+    let mut lefts = Vec::with_capacity(heads.len() + 1);
+    let mut x = 0.0;
+    for (_, share) in heads {
+        lefts.push(x);
+        x += share / total * width;
+    }
+    lefts.push(width);
+
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), Sense::hover());
+    for (index, (name, _)) in heads.iter().enumerate() {
+        ui.painter().text(
+            egui::pos2(rect.min.x + lefts[index], rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            *name,
+            egui::FontId::proportional(10.0),
+            theme::FAINT,
+        );
+    }
+    ui.spacing_mut().item_spacing.y = 0.0;
+    egui::ScrollArea::vertical()
+        .id_salt(salt)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let font = egui::FontId::monospace(10.5);
+            for row in rows {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(width, TABLE_ROW), Sense::hover());
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.max.y - 0.5,
+                    egui::Stroke::new(1.0, theme::GRID),
+                );
+                for (index, cell) in row.iter().enumerate().take(heads.len()) {
+                    let column = Rect::from_x_y_ranges(
+                        rect.min.x + lefts[index]..=rect.min.x + lefts[index + 1] - 6.0,
+                        rect.y_range(),
+                    );
+                    let painter = ui
+                        .painter()
+                        .with_clip_rect(column.intersect(ui.clip_rect()));
+                    let left = column.min.x;
+                    match &cell.under {
+                        None => {
+                            painter.text(
+                                egui::pos2(left, rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                &cell.top,
+                                font.clone(),
+                                cell.colour,
+                            );
+                        }
+                        Some(under) => {
+                            painter.text(
+                                egui::pos2(left, rect.center().y - 6.5),
+                                egui::Align2::LEFT_CENTER,
+                                &cell.top,
+                                font.clone(),
+                                cell.colour,
+                            );
+                            painter.text(
+                                egui::pos2(left, rect.center().y + 6.5),
+                                egui::Align2::LEFT_CENTER,
+                                under,
+                                egui::FontId::monospace(9.5),
+                                theme::DIM,
+                            );
+                        }
+                    }
+                }
+            }
+        });
+}
+
+/// `BTC` out of `BTC_USDT_Perp`.
+fn base_of(instrument: &str) -> &str {
+    instrument.split('_').next().unwrap_or(instrument)
+}
+
+/// `BTCUSDT`, as GRVT's tables print a contract.
+fn product_of(instrument: &str) -> String {
+    instrument.trim_end_matches("_Perp").replace('_', "")
+}
+
+fn side_colour(is_buy: bool) -> egui::Color32 {
+    if is_buy {
+        theme::OK
+    } else {
+        theme::BAD
+    }
+}
+
+/// Cut to `places` decimals toward zero, the way GRVT's tables round: its
+/// -18.83366 prints as -18.8336, not -18.8337.
+fn cut(value: f64, places: i32) -> f64 {
+    let scale = 10f64.powi(places);
+    (value * scale).trunc() / scale
+}
+
+/// A plain number without trailing zeros: `9698.01`, not `9698.010000`.
+fn plain(value: f64) -> String {
+    let text = format!("{value:.6}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// A number that may be zero because nothing happened, which GRVT prints
+/// as `--`.
+fn or_dashes(value: &Option<exchange::Num>) -> String {
+    match value {
+        Some(num) if num.value != 0.0 => num.text.clone(),
+        _ => "--".to_string(),
+    }
+}
+
+fn order_rows(orders: &[account::Order]) -> Vec<Vec<Cell>> {
+    orders
+        .iter()
+        .map(|order| {
+            let base = base_of(&order.instrument);
+            let status = match order.status.as_str() {
+                "FILLED" => theme::OK,
+                "REJECTED" | "CANCELLED" => theme::BAD,
+                _ => theme::MUTED,
+            };
+            let yes_no = |flag: bool| if flag { "ใช่" } else { "ไม่" };
+            vec![
+                Cell::when(&order.at),
+                Cell::one(product_of(&order.instrument), theme::TEXT),
+                Cell::one(order.side(), side_colour(order.is_buy)),
+                Cell::one(
+                    if order.is_market {
+                        "ตลาด".to_string()
+                    } else {
+                        opt_text(&order.price)
+                    },
+                    theme::TEXT,
+                ),
+                Cell::one(format!("{} {base}", opt_text(&order.size)), theme::TEXT),
+                Cell::one(or_dashes(&order.avg_price), theme::TEXT),
+                Cell::one(format!("{} {base}", opt_text(&order.filled)), theme::MUTED),
+                Cell::one(status_label(order), status),
+                Cell::one(
+                    if order.is_market { "Market" } else { "Limit" },
+                    theme::MUTED,
+                ),
+                Cell::one(order.time_in_force_short(), theme::MUTED),
+                Cell::one(yes_no(order.reduce_only), theme::MUTED),
+                Cell::one(yes_no(order.post_only), theme::MUTED),
+            ]
+        })
+        .collect()
+}
+
+fn trade_rows(fills: &[account::Fill]) -> Vec<Vec<Cell>> {
+    fills
+        .iter()
+        .map(|fill| {
+            let base = base_of(&fill.instrument);
+            let value = match (&fill.price, &fill.size) {
+                (Some(price), Some(size)) => plain(price.value * size.value),
+                _ => "-".to_string(),
+            };
+            let realized = fill.realized.as_ref().map(|num| num.value).unwrap_or(0.0);
+            let rate = fill
+                .fee_rate
+                .as_ref()
+                .map(|rate| format!("{}% · ", rate.text))
+                .unwrap_or_default();
+            // Taker pays more than maker, and on this account every fill is
+            // a taker fill, which is itself worth noticing.
+            let who = if fill.is_taker {
+                "จ่ายสเปรด"
+            } else {
+                "ตั้งรอ"
+            };
+            let tenth = |num: &Option<exchange::Num>| {
+                num.as_ref()
+                    .map(|num| format!("{:.1}", cut(num.value, 1)))
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            vec![
+                Cell::when(&fill.at),
+                Cell::one(product_of(&fill.instrument), theme::TEXT),
+                Cell::one(
+                    if fill.is_buy {
+                        "ซื้อ"
+                    } else {
+                        "ขาย"
+                    },
+                    side_colour(fill.is_buy),
+                ),
+                Cell::one(opt_text(&fill.price), theme::TEXT),
+                Cell::one(format!("{} {base}", opt_text(&fill.size)), theme::TEXT),
+                Cell::one(value, theme::TEXT),
+                Cell::one(or_dashes(&fill.realized), bot::pnl_colour(realized)),
+                Cell::two(
+                    format!("{} {}", opt_text(&fill.fee), fill.currency),
+                    format!("{rate}{who}"),
+                    theme::WARN,
+                ),
+                Cell::one(tenth(&fill.index_price), theme::MUTED),
+                Cell::one(tenth(&fill.mark_price), theme::MUTED),
+                Cell::one(fill.trade_id.clone(), theme::DIM),
+            ]
+        })
+        .collect()
+}
+
+fn position_rows(closed: &[account::Closed]) -> Vec<Vec<Cell>> {
+    closed
+        .iter()
+        .map(|row| {
+            let base = base_of(&row.instrument);
+            let pnl = row.after_costs().unwrap_or(0.0);
+            let side = if row.is_long {
+                "ซื้อ"
+            } else {
+                "ขาย"
+            };
+            let margin = match (row.margin_type.as_str(), &row.leverage) {
+                ("", None) => String::new(),
+                (kind, leverage) => format!(
+                    "{} {}x",
+                    if kind == "CROSS" { "Cross" } else { kind },
+                    leverage
+                        .as_ref()
+                        .map(|num| plain(num.value))
+                        .unwrap_or_else(|| "-".into())
+                ),
+            };
+            vec![
+                Cell::when(&row.closed_at),
+                Cell::two(
+                    format!("{} {side}", product_of(&row.instrument)),
+                    margin,
+                    side_colour(row.is_long),
+                ),
+                Cell::one(format!("{:+.4}", cut(pnl, 4)), bot::pnl_colour(pnl)),
+                Cell::one(
+                    row.roe()
+                        .map(|roe| format!("{:+.2}%", cut(roe, 2)))
+                        .unwrap_or_else(|| "-".into()),
+                    bot::pnl_colour(pnl),
+                ),
+                Cell::one(format!("{} {base}", opt_text(&row.size)), theme::TEXT),
+                Cell::one(format!("{} {base}", opt_text(&row.max_size)), theme::MUTED),
+                Cell::one(opt_text(&row.entry), theme::TEXT),
+                Cell::one(opt_text(&row.exit), theme::TEXT),
+                Cell::one(opt_text(&row.fees), theme::WARN),
+                Cell::one(or_dashes(&row.funding), theme::MUTED),
+                Cell::when(&row.opened_at),
+            ]
+        })
+        .collect()
+}
+
 fn opt_text(value: &Option<exchange::Num>) -> String {
     value
         .as_ref()
@@ -5499,6 +5777,121 @@ mod tests {
         assert_eq!(again.slots["code"].x, 11.0);
     }
 
+    /// A layout saved when funding sat under the order history would put
+    /// it on top of the new full-width ledger.
+    #[test]
+    fn an_old_layout_does_not_put_funding_on_top_of_the_ledger() {
+        let mut board = Board::default();
+        board.restore(
+            r#"{"shape":{"x":390.0,"y":1390.0,"w":1.0,"h":1.0},
+                "paid_funding":{"x":1560.0,"y":2900.0,"w":540.0,"h":320.0}}"#,
+        );
+        assert!(
+            !board.slots["paid_funding"]
+                .rect()
+                .intersects(board.slots["ledger"].rect()),
+            "funding ทับประวัติบัญชี"
+        );
+    }
+
+    /// The ledger, fed the exchange's own rows from 16 Nov, prints the
+    /// figures GRVT's website printed for the same rows (the screenshots in
+    /// `rq add/16-11-69`): realized after fees, ROE, trade value, and the
+    /// date over the time.
+    #[test]
+    fn the_ledger_prints_what_the_grvt_website_prints_for_the_same_rows() {
+        let mut board = Board::default();
+        board.account_data.closed = account::read_closed(&serde_json::json!([{
+            "instrument": "BTC_USDT_Perp",
+            "is_long": false,
+            "closed_volume_base": "0.15",
+            "entry_price": "64586.0",
+            "exit_price": "64653.4",
+            "realized_pnl": "-10.11",
+            "cumulative_fee": "8.723659",
+            "cumulative_realized_funding_payment": "0.0",
+            "max_initial_margin": "969.053503",
+            "max_open_interest_base": "0.15",
+            "leverage": "10.0",
+            "margin_type": "CROSS",
+            "status": "CLOSED",
+            "open_time_at": "2026-11-16T05:17:28Z",
+            "close_time_at": "2026-11-16T05:18:06Z"
+        }]));
+        board.account_data.fills = account::read_fills(&serde_json::json!([{
+            "instrument": "BTC_USDT_Perp",
+            "is_buyer": true,
+            "is_taker": true,
+            "size": "0.15",
+            "price": "64653.4",
+            "fee": "4.364104",
+            "fee_rate": "0.045",
+            "fee_currency": "USDT",
+            "realized_pnl": "-10.11",
+            "index_price": "64647.750679656",
+            "mark_price": "64616.640658819",
+            "trade_id": "334127896-1",
+            "event_time_at": "2026-11-16T05:18:06Z"
+        }]));
+        board.account_data.orders = account::read_orders(&serde_json::json!([{
+            "is_market": true,
+            "reduce_only": true,
+            "post_only": false,
+            "time_in_force": "GOOD_TILL_TIME",
+            "legs": [{
+                "instrument": "BTC_USDT_Perp",
+                "is_buying_asset": true,
+                "limit_price": "0.0",
+                "size": "0.15"
+            }],
+            "state": {
+                "status": "FILLED",
+                "avg_fill_price": ["64653.4"],
+                "traded_size": ["0.15"]
+            },
+            "metadata": { "create_time_at": "2026-11-16T05:18:06Z" }
+        }]));
+
+        board.ledger_tab = Ledger::Positions;
+        let painted = painted_text(&mut board).join(" | ");
+        for want in [
+            "-18.8336",
+            "-1.94%",
+            "Cross 10x",
+            "2026-11-16",
+            "12:18:06",
+            "12:17:28",
+        ] {
+            assert!(painted.contains(want), "ไม่มี {want}: {painted}");
+        }
+
+        board.ledger_tab = Ledger::Trades;
+        let painted = painted_text(&mut board).join(" | ");
+        for want in [
+            "9698.01",
+            "-10.11",
+            "4.364104 USDT",
+            "64647.7",
+            "334127896-1",
+        ] {
+            assert!(painted.contains(want), "ไม่มี {want}: {painted}");
+        }
+
+        board.ledger_tab = Ledger::Orders;
+        let painted = painted_text(&mut board).join(" | ");
+        for want in [
+            "BTCUSDT",
+            "ตลาด",
+            "64653.4",
+            "0.15 BTC",
+            "Market",
+            "GTT",
+            "ได้ครบ",
+        ] {
+            assert!(painted.contains(want), "ไม่มี {want}: {painted}");
+        }
+    }
+
     /// No two cards start on top of each other.
     #[test]
     fn the_fresh_layout_has_no_card_on_top_of_another() {
@@ -5538,9 +5931,11 @@ mod tests {
             "status": "CLOSED",
             "close_time_at": "2026-11-13T09:03:06Z"
         }]));
+        board.ledger_tab = Ledger::Positions;
         let painted = painted_text(&mut board);
+        // -17.7915 before fees, 8.975182 in fees: -26.7666 after them.
         assert!(
-            painted.iter().any(|text| text.contains("-17.79")),
+            painted.iter().any(|text| text.contains("-26.7666")),
             "ไม่มีตัวเลขติดลบบนจอเลย · ที่วาดจริงคือ {painted:?}"
         );
     }
@@ -5635,6 +6030,7 @@ mod tests {
             "fee_currency": "USDT",
             "event_time_at": "2026-11-13T09:03:06Z"
         }]));
+        board.ledger_tab = Ledger::Trades;
         let painted = painted_text(&mut board).join(" | ");
         assert!(painted.contains("4.491594"), "{painted}");
         assert!(painted.contains("0.045"), "{painted}");
@@ -6346,10 +6742,8 @@ mod tests {
                     "balance",
                     "positions",
                     "open_orders",
-                    "orders",
-                    "closed",
-                    "fills",
                     "paid_funding",
+                    "ledger",
                 ],
             ),
             (4, &["runs", "calendar"]),
@@ -7435,10 +7829,8 @@ mod tests {
             "balance",
             "positions",
             "open_orders",
-            "orders",
-            "closed",
-            "fills",
             "paid_funding",
+            "ledger",
         ];
         for (index, a) in ids.iter().enumerate() {
             for b in &ids[index + 1..] {
