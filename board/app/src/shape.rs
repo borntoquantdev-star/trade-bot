@@ -176,6 +176,34 @@ pub fn waiting_for(row: &Row) -> Option<String> {
     }
 }
 
+/// How long without a tick before the card stops claiming the bot is
+/// running, when the run log does not say it ended. Long enough for a slow
+/// loop (the default is 60 s), short enough that a dead bot is noticed.
+pub const QUIET_AFTER: f64 = 150.0;
+
+/// Why the picture is not moving, or `None` while the bot is still running.
+///
+/// The picture is the bot's trail, so it stops when the bot stops - while
+/// the candles beside it keep moving, because they come from the market.
+/// Without saying so, a finished run looked like a frozen card (asked about
+/// on 16 Nov, after a run that had simply reached `--iterations`).
+pub fn stopped(ended_at: Option<&str>, newest_at: &str, now: Option<f64>) -> Option<String> {
+    if let Some(ended) = ended_at.filter(|ended| !ended.trim().is_empty()) {
+        return Some(format!(
+            "บอทหยุดแล้ว · รอบนี้จบตอน {} · ภาพจึงไม่ขยับ",
+            crate::time::clock(ended)
+        ));
+    }
+    let quiet = now? - crate::time::unix_of(newest_at)?;
+    (quiet > QUIET_AFTER).then(|| {
+        format!(
+            "ไม่มี tick ใหม่มา {:.0} นาที (ล่าสุด {}) · บอทน่าจะหยุดไปแล้ว",
+            (quiet / 60.0).floor().max(1.0),
+            crate::time::clock(newest_at)
+        )
+    })
+}
+
 /// A price with as many decimals as its size deserves.
 pub fn fmt(price: f64) -> String {
     if price.abs() >= 1000.0 {
@@ -498,6 +526,38 @@ mod tests {
         // The run log knows better: this run started at 06:05.
         let start = crate::time::unix_of("2026-11-16T05:06:05+00:00");
         assert_eq!(ticks(&rows, 50, start).len(), 2);
+    }
+
+    #[test]
+    fn a_run_that_ended_says_so_with_the_time_it_ended() {
+        let text = stopped(
+            Some("2026-11-16T05:18:07+00:00"),
+            "2026-11-16T05:18:07+00:00",
+            None,
+        )
+        .unwrap();
+        assert!(text.contains("บอทหยุดแล้ว"), "{text}");
+        assert!(text.contains("12:18:07"), "เวลาไทย: {text}");
+    }
+
+    #[test]
+    fn a_running_bot_with_fresh_ticks_is_not_called_stopped() {
+        let newest = "2026-11-16T05:18:07+00:00";
+        let now = crate::time::unix_of(newest).unwrap() + 30.0;
+        assert_eq!(stopped(None, newest, Some(now)), None);
+        assert_eq!(
+            stopped(Some(""), newest, Some(now)),
+            None,
+            "ยังไม่มีเวลาจบ = ยังรัน"
+        );
+    }
+
+    #[test]
+    fn a_bot_that_went_quiet_without_ending_is_suspected_stopped() {
+        let newest = "2026-11-16T05:18:07+00:00";
+        let now = crate::time::unix_of(newest).unwrap() + 600.0;
+        let text = stopped(None, newest, Some(now)).unwrap();
+        assert!(text.contains("10 นาที"), "{text}");
     }
 
     #[test]

@@ -1578,6 +1578,7 @@ impl Board {
         let run = newest.and_then(|row| self.past.runs.iter().find(|run| run.covers(&row.at)));
         let since = run.and_then(|run| crate::time::unix_of(&run.started_at));
         let name = run.map(|run| run.strategy.clone()).unwrap_or_default();
+        let halted = self.shape_stopped();
         let ticks = shape::ticks(&self.bot.rows, shape::SHOWN, since);
         let banded = shape::has_band(&ticks);
         let settings = shape::settings(&self.bot.rows);
@@ -1591,6 +1592,8 @@ impl Board {
         let sentence = newest.and_then(shape::waiting_for);
         let (state, status) = if ticks.len() < 2 {
             (theme::State::Idle, "ยังไม่มี tick".to_string())
+        } else if halted.is_some() {
+            (theme::State::Idle, "หยุดแล้ว · ภาพรอบล่าสุด".to_string())
         } else if banded {
             (
                 theme::State::Ok,
@@ -1615,6 +1618,17 @@ impl Board {
                 if ticks.len() < 2 {
                     waiting(ui, &load, "tradebot --strategy ping_pong --dry-run");
                     return;
+                }
+                // First, before anything that reads as live: a picture that
+                // has stopped moving must say why.
+                if let Some(why) = &halted {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{why} · รันต่อ: tradebot --config config/testnet.yaml --live"
+                        ))
+                        .size(11.0)
+                        .color(theme::WARN),
+                    );
                 }
                 if banded {
                     // The rule, in the words a person would use, with the
@@ -1658,9 +1672,13 @@ impl Board {
                 // line ran off the card (seen on the board, 16 Nov).
                 if let Some(sentence) = &sentence {
                     ui.label(
-                        egui::RichText::new(format!("ตอนนี้: {sentence}"))
-                            .size(10.5)
-                            .color(theme::ACCENT),
+                        egui::RichText::new(if halted.is_some() {
+                            format!("ตอนจบรอบ: {sentence}")
+                        } else {
+                            format!("ตอนนี้: {sentence}")
+                        })
+                        .size(10.5)
+                        .color(theme::ACCENT),
                     );
                 }
                 ui.add_space(4.0);
@@ -1669,6 +1687,17 @@ impl Board {
             },
         );
         self.put("shape", slot);
+    }
+
+    /// Why the strategy picture has stopped moving, if it has.
+    fn shape_stopped(&self) -> Option<String> {
+        let newest = self.bot.rows.last()?;
+        let run = self.past.runs.iter().find(|run| run.covers(&newest.at));
+        shape::stopped(
+            run.map(|run| run.ended_at.as_str()),
+            &newest.at,
+            crate::time::now_unix(),
+        )
     }
 
     fn feed_card(&mut self, ui: &mut egui::Ui) {
@@ -1923,6 +1952,7 @@ impl Board {
         out.push((
             "shape",
             if has
+                && self.shape_stopped().is_none()
                 && self
                     .bot
                     .rows
@@ -5317,8 +5347,11 @@ mod tests {
     }
 
     /// Ticks from a ping_pong run: flat, then a buy under the band, then
-    /// holding it.
-    fn ping_pong_rows() -> Vec<bot::Row> {
+    /// holding it - the newest one `ago` seconds before now, because the
+    /// card judges by the real clock whether the bot is still running.
+    fn ping_pong_rows(ago: f64) -> Vec<bot::Row> {
+        let base = crate::time::now_unix().unwrap() - ago - 25.0;
+        let at = |offset: f64| crate::time::clock_iso(base + offset);
         let view = |avg: f64| {
             format!(
                 r#""view":{{"average":"{avg}","buy_below":"{}","sell_above":"{}","window":"12","edge_pct":"0.03","stop_pct":"0.4","max_hold_s":"180"}}"#,
@@ -5329,7 +5362,8 @@ mod tests {
         let mut rows: Vec<bot::Row> = (0..20)
             .map(|i| {
                 serde_json::from_str(&format!(
-                    r#"{{"at":"2026-11-16T04:00:{i:02}+00:00","symbol":"BTC_USDT_Perp","price":"{}",{}}}"#,
+                    r#"{{"at":"{}","symbol":"BTC_USDT_Perp","price":"{}",{}}}"#,
+                    at(i as f64),
                     67000.0 + i as f64,
                     view(67000.0 + i as f64)
                 ))
@@ -5338,21 +5372,23 @@ mod tests {
             .collect();
         rows.push(
             serde_json::from_str(&format!(
-                r#"{{"at":"2026-11-16T04:00:21+00:00","symbol":"BTC_USDT_Perp","price":"66980",{},
+                r#"{{"at":"{}","symbol":"BTC_USDT_Perp","price":"66980",{},
                     "signal":{{"side":"buy","stop_price":"66712.1"}},
                     "order":{{"side":"buy","limit_price":"66990","qty":"0.01"}},
                     "receipt":{{"broker_order_id":"0x00"}}}}"#,
+                at(21.0),
                 view(67010.0)
             ))
             .unwrap(),
         );
         rows.push(
-            serde_json::from_str(
-                r#"{"at":"2026-11-16T04:00:25+00:00","symbol":"BTC_USDT_Perp","price":"66995",
-                    "position":{"side":"buy","qty":"0.01","entry_price":"66988"},
-                    "view":{"average":"67008","buy_below":"66987.9","sell_above":"67028.1",
-                            "stop":"66720.0","held_s":"4","max_hold_s":"180","window":"12","edge_pct":"0.03"}}"#,
-            )
+            serde_json::from_str(&format!(
+                r#"{{"at":"{}","symbol":"BTC_USDT_Perp","price":"66995",
+                    "position":{{"side":"buy","qty":"0.01","entry_price":"66988"}},
+                    "view":{{"average":"67008","buy_below":"66987.9","sell_above":"67028.1",
+                            "stop":"66720.0","held_s":"4","max_hold_s":"180","window":"12","edge_pct":"0.03"}}}}"#,
+                at(25.0)
+            ))
             .unwrap(),
         );
         rows
@@ -5363,9 +5399,10 @@ mod tests {
     #[test]
     fn the_strategy_picture_says_the_rule_and_what_it_is_waiting_for() {
         let mut board = Board::default();
-        board.bot.rows = ping_pong_rows();
+        board.bot.rows = ping_pong_rows(2.0);
         let painted = painted_text(&mut board).join(" | ");
         assert!(painted.contains("หน้าตากลยุทธ์"), "{painted}");
+        assert!(!painted.contains("หยุด"), "บอทยังรันอยู่: {painted}");
         assert!(painted.contains("เฉลี่ย 12 ราคาล่าสุด"), "{painted}");
         assert!(painted.contains("ห่างเส้นกลาง 0.03%"), "{painted}");
         assert!(
@@ -5374,6 +5411,21 @@ mod tests {
         );
         assert!(painted.contains("ถือครบ 180 วิ (ผ่านไป 4)"), "{painted}");
         assert!(painted.contains("ซื้อ"), "จุดที่ซื้อต้องมีป้าย");
+    }
+
+    /// A bot that has stopped leaves a picture that stops moving while the
+    /// candles beside it carry on. The card has to say so, or it looks
+    /// frozen (asked about on 16 Nov) - and must not call the last tick
+    /// "now".
+    #[test]
+    fn a_picture_from_a_bot_that_stopped_says_it_stopped() {
+        let mut board = Board::default();
+        board.bot.rows = ping_pong_rows(600.0);
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(painted.contains("หยุดแล้ว"), "{painted}");
+        assert!(painted.contains("บอทน่าจะหยุดไปแล้ว"), "{painted}");
+        assert!(painted.contains("ตอนจบรอบ: ถือซื้ออยู่"), "{painted}");
+        assert!(!painted.contains("ตอนนี้:"), "{painted}");
     }
 
     /// A strategy that does not report its lines gets a picture of the
