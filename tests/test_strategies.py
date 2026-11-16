@@ -168,3 +168,29 @@ def test_the_throttle_blocks_a_second_signal_in_the_same_window():
     )
     assert strategy.get_signal(view(100)) is not None
     assert strategy.get_signal(view(100)) is None
+
+
+# --- the stop, in the live loop ----------------------------------------------------
+#
+# The live loop does not stop a position out by itself; these two did not
+# either, until tradebot --check caught it.
+
+
+@pytest.mark.parametrize("make", [lambda: MaCrossStrategy(stop_pct="1"), lambda: RandomStrategy()])
+def test_a_long_is_closed_once_the_price_crosses_its_stop(make):
+    strategy = make()
+    held = Position(SYMBOL, Side.BUY, D("1"), D("100"))
+    assert strategy.get_exit(view(99.5, position=held)) is None
+    assert "stop" in strategy.get_exit(view(98.9, position=held))
+
+
+@pytest.mark.parametrize("make", [lambda: MaCrossStrategy(stop_pct="1"), lambda: RandomStrategy()])
+def test_a_short_is_closed_once_the_price_crosses_its_stop(make):
+    strategy = make()
+    held = Position(SYMBOL, Side.SELL, D("1"), D("100"))
+    assert strategy.get_exit(view(100.5, position=held)) is None
+    assert "stop" in strategy.get_exit(view(101.1, position=held))
+
+
+def test_nothing_to_close_without_a_position():
+    assert MaCrossStrategy().get_exit(view(100)) is None

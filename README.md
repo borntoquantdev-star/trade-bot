@@ -227,6 +227,7 @@ it the bot refuses to start and sends nothing.
 | `tradebot --list-strategies` | What is registered. |
 | `tradebot --live --fetch-candles --days 365` | Download price history into `data/candles`. Without `--live` the paper broker answers and its invented bars go under `data/candles/paper`. |
 | `tradebot --backtest --days 365 --trades` | Replay it through the risk gate. Offline. |
+| `tradebot --check --strategy NAME` | Is it fit for testnet? Contract, its own tests, real candles, paper. Exit 0 = pass. See `docs/strategies.md`. |
 | `tradebot --resume` | Clear a halt the risk gate wrote: the paper broker's; `--live --resume` for an exchange's. |
 | `tradebot --close --yes` | Flatten the configured symbol. |
 | `tradebot --iterations N` | Stop after N loops. |

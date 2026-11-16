@@ -5,6 +5,7 @@
     tradebot --list-strategies         what is registered
     tradebot --fetch-candles           download price history into data/candles
     tradebot --backtest                replay that history, offline
+    tradebot --check                   is the strategy fit for testnet? (0 = pass)
     tradebot --live                    real orders (prod requires this flag)
     tradebot --resume                  clear a paper halt (add --live for an exchange's)
     tradebot --close --yes             flatten the configured symbol
@@ -46,6 +47,8 @@ from ..data.store import DEFAULT_ROOT, CandleStore
 from ..money import D
 from ..strategies import UnknownStrategy, build_strategy, describe_strategies
 from ..utils.logger import setup_logger
+from .check import run_check
+from .check import write as write_check
 
 DEFAULT_CONFIG = "config/config.yaml"
 
@@ -177,6 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     actions.add_argument("--resume", action="store_true", help="clear a halt and exit")
     actions.add_argument(
+        "--check",
+        action="store_true",
+        help="is the strategy fit for testnet? contract, its tests, real candles, paper - "
+        "offline, then exit (0 = pass)",
+    )
+    actions.add_argument(
         "--close", action="store_true", help="flatten the configured symbol and exit"
     )
     actions.add_argument("--yes", action="store_true", help="confirm an action that moves money")
@@ -245,6 +254,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = _load(args, log)
     if config is None:
         return 2
+
+    if args.check:
+        # Before the broker too: the check never connects. Its paper layer
+        # builds a paper broker of its own.
+        return _check(config, args, log)
 
     if args.backtest:
         # Deliberately before the broker is built: a backtest reads the disk
@@ -473,6 +487,43 @@ def _fetch_candles(
     else:
         log.info("next: %s", _command(args, f"--backtest --days {args.days}"))
     return 0
+
+
+def _check(config: BotConfig, args: argparse.Namespace, log: logging.Logger) -> int:
+    """Run the four-layer check and print the verdict.  Offline."""
+    name = args.strategy or config.trading.strategy
+    # The strategy talks a lot while it is being probed a few thousand
+    # times; none of it belongs in the bot's log.
+    quiet = logging.getLogger("tradebot_check_quiet")
+    quiet.propagate = False
+    if not quiet.handlers:
+        quiet.addHandler(logging.NullHandler())
+
+    def make():
+        return build_strategy(name, config, quiet)
+
+    try:
+        make()
+    except UnknownStrategy as exc:
+        log.error("%s", exc)
+        return 2
+    window = _window(args, log)
+    if window is None:
+        return 2
+    report = run_check(
+        name,
+        make,
+        config,
+        data_dir=Path(args.data_dir),
+        window=window,
+        fetch=_command(args, f"--live --fetch-candles --days {args.days}"),
+        log=quiet,
+    )
+    print(report.text())
+    folder = Path(args.log_file).parent if args.log_file else Path("logs")
+    print()
+    print(f"report: {write_check(report, folder)}")
+    return 0 if report.passed else 1
 
 
 def _command(args: argparse.Namespace, rest: str) -> str:

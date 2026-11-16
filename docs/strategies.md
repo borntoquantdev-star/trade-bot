@@ -93,6 +93,19 @@ strategy that needs true OHLCV needs `MarketView` widened first (see
    influence size. The gate ignores all of it by design.
 5. **Write a `reason` you can read in a week**, with the numbers in it. It
    goes to `logs/audit.jsonl` and is the first thing you will look at.
+6. **Watch your own stop in `get_exit()`.** The live loop only knows the price
+   it just read and does not stop a position out by itself; the backtester
+   does, which is why a missing exit looks fine until it trades. Work the stop
+   out from `market.position.entry_price`:
+
+   ```python
+   def get_exit(self, market):
+       held = market.position
+       if held is None:
+           return None
+       stop = held.entry_price * (ONE - self.stop_fraction)   # a long
+       return "stop hit" if self.stop_hit(market, stop) else None
+   ```
 
 ## Testing
 
@@ -129,6 +142,31 @@ A caution learned while writing `test_strategies.py`: a crossover needs a
 price series where the cross happens on the **last** point and nowhere
 earlier. `[100] * 7 + [130]` is a cross; a steadily rising ramp is not, even
 though it looks like one.
+
+## The check: required before testnet
+
+```bash
+tradebot --config config/testnet.yaml --check --strategy breakout
+```
+
+One command, four layers, and the machine gives the verdict:
+
+1. **Contract** - a dozen synthetic price series (trends, waves, jumps, noise):
+   never crashes, no network or files, every stop on the losing side, signals
+   dated with `market.now`, `get_exit()` asks out once the stop is crossed,
+   the same prices give the same answers, and `chart()` only draws.
+2. **Tests** - the test files in `tests/` that name the strategy's class or
+   module. None at all is a failure: only they say it does what you meant.
+3. **Replay** - the stored real candles through the real risk gate. No signal
+   on real prices, or every signal refused, is a failure.
+4. **Paper** - 30 ticks of the real engine on the paper broker, no errors.
+
+It prints PASS or NOT YET with the reasons, exits 0 only on a pass, and keeps
+the report in `logs/check-<name>.json`. The fingerprint in it is a hash of the
+strategy's file: change the file and the pass no longer applies.
+
+A pass means the strategy does what it says without breaking anything. It does
+not mean it makes money; that is `--backtest` and time.
 
 ## Then watch it
 

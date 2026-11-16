@@ -14,7 +14,7 @@ from decimal import Decimal
 from typing import Any
 
 from ..money import ONE, D
-from ..types import Signal
+from ..types import Side, Signal
 from .base import MarketView, Strategy
 
 
@@ -49,6 +49,26 @@ class RandomStrategy(Strategy):
             "RandomStrategy has no edge. It is here to prove the pipeline works, "
             "not to make money. Replace it before going anywhere near real funds."
         )
+
+    def get_exit(self, market: MarketView) -> str | None:
+        """Close the position once the price crosses its stop.
+
+        The live loop does not stop a position out on its own - it only knows
+        the price it just read - so without this a position would ride past
+        its stop for as long as the bot ran (found by ``tradebot --check``).
+        The stop is worked out from the position's entry, so it still holds
+        after a restart or a fill away from the signal's price.
+        """
+        held = market.position
+        if held is None:
+            return None
+        if held.side is Side.BUY:
+            stop = held.entry_price * (ONE - self.stop_fraction)
+        else:
+            stop = held.entry_price * (ONE + self.stop_fraction)
+        if self.stop_hit(market, stop):
+            return f"stop hit at {stop:.2f}"
+        return None
 
     def get_signal(self, market: MarketView) -> Signal | None:
         if market.in_position:

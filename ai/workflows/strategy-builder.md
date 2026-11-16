@@ -172,6 +172,15 @@ class ExampleStrategy(Strategy):
             created_at=market.now,
             valid_for_seconds=60,
         )
+
+    def get_exit(self, market: MarketView) -> Optional[str]:
+        # The live loop does not stop a position out by itself. Without
+        # this, a position rides past its stop for as long as the bot runs.
+        held = market.position
+        if held is None:
+            return None
+        stop = held.entry_price * (ONE - self.stop_fraction)
+        return "stop hit" if self.stop_hit(market, stop) else None
 ```
 
 Register it:
@@ -192,6 +201,9 @@ Rules for this phase:
 - Return `None` rather than raising when the data is not there yet.
 - Stop below entry for a long, above for a short. The gate refuses otherwise,
   and a test should prove you got it right.
+- `get_exit()` must close the position once its stop is crossed, worked out
+  from `market.position.entry_price`. `tradebot --check` fails a strategy
+  without it, because live, nothing else will.
 
 ---
 
@@ -212,6 +224,20 @@ Cover at least:
 pytest tests/test_<name>_strategy.py -v
 ruff check tradebot tests
 ```
+
+Then the check, which is the gate to Phase 5 - not your judgement and not
+mine:
+
+```bash
+tradebot --config config/testnet.yaml --live --fetch-candles --days 1   # real candles, once
+tradebot --config config/testnet.yaml --check --strategy <name>
+```
+
+It runs four layers (contract, these tests, real candles, paper) and ends in
+PASS or NOT YET. On NOT YET, read the failed lines to the user in Thai, fix
+the code, and run it again. **Do not go on to Phase 5 until it says PASS**,
+and run it again after every change to the strategy file: the fingerprint in
+`logs/check-<name>.json` belongs to the exact file that passed.
 
 Then watch it run offline, where nothing can be lost:
 
@@ -238,8 +264,8 @@ Then tell the user, in plain terms:
 
 - what the audit trail actually shows (number of signals, fills, refusals by
   code),
-- that paper and testnet results say nothing about profitability, because
-  there is no backtest in this repo yet,
+- that a check pass, paper and testnet say nothing about profitability; that
+  question belongs to `tradebot --backtest` (see `docs/backtest.md`) and to time,
 - that going to `prod` is their decision, needs `--live` and a real account,
   and should start at a size they would not mind losing entirely.
 
