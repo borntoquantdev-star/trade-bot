@@ -30,6 +30,11 @@ ls tradebot/strategies/
 If the user already has a strategy in this repo and wants to change it, skip
 to Phase 3 and work on that file.
 
+If `bot/strategy.yaml` exists, the bot-trade-studio plugin has already run the
+interview (`/bot:strategy`): read it, read the rule back to the user as in
+Phase 2, and go on to Phase 3 without asking again. The table "กลยุทธ์ที่ลอง"
+in `bot/STATUS.md` says which strategies were tried and how far each got.
+
 ---
 
 ## Phase 0 — where are they starting from
@@ -58,11 +63,13 @@ Phase 2.
 
 ### 1.2 Instrument and pace
 
-Tell them what the platform allows first:
+Tell them what the platform allows first. Which exchange is in
+`config/testnet.yaml` (`exchange:`); the class runs on GRVT:
 
-> Hyperliquid เป็น crypto perpetual futures เทรด 24/7 มี testnet ให้ลองฟรี
-> ชื่อสินค้าเป็นชื่อเหรียญเลย: `BTC` `ETH` `SOL` (ไม่ใช่ `BTC_USDT_Perp`)
-> ออเดอร์ขั้นต่ำ 10 USD ต่อไม้ (ดู `instrument.min_notional_usdt`)
+> GRVT เป็น crypto perpetual futures เทรด 24/7 มี testnet ให้ลองฟรี
+> ชื่อสินค้าแบบ `BTC_USDT_Perp` `ETH_USDT_Perp` · BTC มีมูลค่าขั้นต่ำต่อไม้ 100 USDT
+> ถ้าทุนทดลองน้อย ให้ใช้เหรียญที่ขั้นต่ำ 5 ดอลลาร์ เช่น `SOL_USDT_Perp`
+> (Hyperliquid ใช้ชื่อเหรียญเฉยๆ `BTC` `ETH` และขั้นต่ำ 10 USD)
 > บอทจำกัด exposure ที่ ทุน × `risk.max_leverage` ส่วน leverage ของบัญชีเป็นอีกเรื่อง
 
 Then ask for: symbol, how often it should look at the market
@@ -254,10 +261,15 @@ make sense — a strategy whose signals are all refused for
 ## Phase 5 — testnet, then a decision about real money
 
 ```bash
-cp config/config.example.yaml config/config.yaml   # fill in testnet keys
-tradebot --doctor
-tradebot --live --strategy <name>                  # env: testnet
+tradebot --config config/testnet.yaml --check --strategy <name>     # again: must PASS
+tradebot --config config/testnet.yaml --live --doctor
+tradebot --config config/testnet.yaml --live --strategy <name> --iterations 24 --close-at-end
 ```
+
+Keys live in `config/.env`, typed by the user, never pasted into the chat.
+Afterwards, go through the run with them (the plugin's `/bot:review`): what
+fired, what was refused and why, what the exits were. Any change to the
+strategy goes back through `--check` before the next `--live`.
 
 Let it run long enough to produce real refusals and at least a few fills.
 Then tell the user, in plain terms:
