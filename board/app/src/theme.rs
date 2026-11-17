@@ -107,5 +107,9 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.active.bg_fill = ACCENT;
     visuals.selection.bg_fill = ACCENT.gamma_multiply(0.35);
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+    // The board is drawn dark only. egui otherwise follows the OS theme, and
+    // on a light Windows the widgets it styles itself (the top bar's
+    // buttons) came up white on this dark canvas.
+    ctx.set_theme(egui::ThemePreference::Dark);
     ctx.set_visuals(visuals);
 }

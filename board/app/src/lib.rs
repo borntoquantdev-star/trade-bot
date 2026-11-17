@@ -12,6 +12,7 @@ pub mod bot;
 pub mod candles;
 pub mod card;
 pub mod code;
+pub mod control;
 pub mod depth;
 pub mod equity;
 pub mod exchange;

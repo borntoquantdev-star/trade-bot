@@ -4,16 +4,59 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Serves the board's WASM bundle, and the files the bot writes"
+# So `cargo run -p board-server` (start.ps1, the README, the docs) keeps
+# meaning the read-only server now that the crate has a second program.
+default-run = "board-server"
+
+# One library, two programs. The library is the server; `board-server` is
+# today's environment-driven binary (read-only, binds 0.0.0.0 for Railway) and
+# `TradeBot` is the double-click launcher for students (loopback only, control
+# mode on). Both call the same `serve_on`, so the two cannot drift apart.
+[lib]
+name = "board_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "board-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "TradeBot"
+path = "src/bin/launcher.rs"
 
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "fs",
+    "process",
+    "io-util",
+    "time",
+    "sync",
+] }
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # rustls rather than the system TLS so the runtime image needs no openssl.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+
+# Only the launcher on Windows touches these: the console code page, the
+# Ctrl+C / window-close handler, and the job object that keeps a bot from
+# outliving the window that started it.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

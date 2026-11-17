@@ -9,6 +9,7 @@ use crate::bot::{self, Bot, Kind, Winner};
 use crate::candles::{self, History, Load};
 use crate::card::{self, Slot};
 use crate::code::{self, Code};
+use crate::control::{self, Control};
 use crate::depth;
 use crate::equity;
 use crate::exchange::{self, Exchange, Kind as Market};
@@ -36,7 +37,7 @@ const INSTRUMENTS: [&str; 4] = [
 /// The three places worth jumping to. An infinite canvas is only useful if
 /// a person can get back to where the cards are, and a student who scrolls
 /// into empty space has lost the board.
-const VIEWS: [(&str, [f32; 5]); 5] = [
+const VIEWS: [(&str, [f32; 5]); 6] = [
     ("ตลาด", [0.0, 0.0, 1450.0, 1060.0, 0.0]),
     // Wide enough for the order's trip, which sits past the last stage.
     ("บอท", [350.0, 1130.0, 2270.0, 1950.0, 0.0]),
@@ -47,7 +48,13 @@ const VIEWS: [(&str, [f32; 5]); 5] = [
     // What happened before now: every run the bot has made, and what each
     // day came to.
     ("ประวัติ", [20.0, 3290.0, 1430.0, 3750.0, 0.0]),
+    // Start and stop the bot. Below everything else and drawn only where the
+    // board's own server offers it: see `Board::zone_shown`.
+    ("ควบคุม", [20.0, 3800.0, 1160.0, 4500.0, 0.0]),
 ];
+
+/// Which of `VIEWS` is the control panel.
+const CONTROL_ZONE: usize = 5;
 
 /// The five stages of the pipeline, as card ids. One card each, so the road
 /// a decision walks down is a road on the screen and not a list inside a
@@ -106,7 +113,7 @@ tradebot --config config/testnet.yaml --live --close-at-end";
 /// With no candles stored yet, the bot's own error names the fetch command.
 const BACKTEST: &str = "tradebot --config config/testnet.yaml --backtest --days 1 --trades";
 
-const VIEW_ALIASES: [&str; 5] = ["market", "bot", "test", "account", "history"];
+const VIEW_ALIASES: [&str; 6] = ["market", "bot", "test", "account", "history", "control"];
 
 /// `%E0%B8%9A` back to the bytes it stands for. Anything that is not a
 /// well-formed escape is kept as it was, and bytes that do not make UTF-8
@@ -249,6 +256,13 @@ pub struct Board {
     started: bool,
     /// Which tab of the account history is open.
     ledger_tab: Ledger,
+    /// Start and stop the bot, and put the keys in. Present only on a board
+    /// whose server has the routes; see `control.rs`.
+    control: Control,
+    /// The link asked for the control zone before the board knew whether it
+    /// has one. If it turns out not to, the camera goes back to the market
+    /// instead of staying on an empty patch of canvas.
+    control_landing: bool,
 }
 
 /// The two charts that can be zoomed.
@@ -315,6 +329,10 @@ impl Default for Board {
         // sentence; the calendar is square because a month is.
         slots.insert("runs", Slot::new(40.0, 3320.0, 790.0, 390.0));
         slots.insert("calendar", Slot::new(860.0, 3320.0, 570.0, 390.0));
+        // The control panel, below the history. Always in the layout so a
+        // saved position survives; drawn and counted only when the server
+        // has it.
+        slots.insert("control", Slot::new(40.0, 3850.0, 1100.0, 600.0));
         Self {
             // Opens on the market, not zoomed out to fit everything: eleven
             // cards at once is a map, not a screen.
@@ -333,6 +351,8 @@ impl Default for Board {
             // The strategy, because it is the stage a person is most often
             // trying to understand and the only one they wrote themselves.
             ledger_tab: Ledger::default(),
+            control: Control::default(),
+            control_landing: false,
             code_stage: 1,
             code_pick: 0,
             code_at: None,
@@ -431,11 +451,51 @@ impl Board {
             .zip(VIEW_ALIASES)
             .position(|((label, _), alias)| wanted == *label || wanted == alias);
         match found {
+            // A board that has no control panel has no such place to go to.
+            Some(CONTROL_ZONE)
+                if self.control.availability() == control::Availability::Unavailable =>
+            {
+                false
+            }
             Some(index) => {
                 self.scene_rect = view(index);
+                // Asked for before the server has said whether it has one.
+                self.control_landing = index == CONTROL_ZONE
+                    && self.control.availability() == control::Availability::Unknown;
                 true
             }
             None => false,
+        }
+    }
+
+    /// Does this zone get a button on the nav bar? Every zone does, but the
+    /// control panel: it exists only where the server offers it, and a
+    /// button for a place with nothing in it would be a lie.
+    fn zone_shown(&self, index: usize) -> bool {
+        index != CONTROL_ZONE || self.control.available()
+    }
+
+    /// Is this card on the board? Only the control panel can be absent.
+    fn present(&self, id: &str) -> bool {
+        id != "control" || self.control.available()
+    }
+
+    /// Settle a `#control` link once the server has answered: a board
+    /// without the panel goes back to the market rather than leaving the
+    /// camera on blank canvas.
+    fn settle_control_landing(&mut self) {
+        if !self.control_landing {
+            return;
+        }
+        match self.control.availability() {
+            control::Availability::Unknown => {}
+            control::Availability::Available => self.control_landing = false,
+            control::Availability::Unavailable => {
+                self.control_landing = false;
+                if self.looking_at() == Some(CONTROL_ZONE) {
+                    self.scene_rect = view(0);
+                }
+            }
         }
     }
 
@@ -518,7 +578,7 @@ impl Board {
     /// The rectangle every card sits inside.
     fn bounds(&self) -> Rect {
         let mut bounds: Option<Rect> = None;
-        for slot in self.slots.values() {
+        for (_, slot) in self.slots.iter().filter(|(id, _)| self.present(id)) {
             bounds = Some(match bounds {
                 Some(bounds) => bounds.union(slot.rect()),
                 None => slot.rect(),
@@ -535,14 +595,16 @@ impl Board {
     fn cards_in(&self, band: Rect) -> BTreeSet<&'static str> {
         self.slots
             .iter()
-            .filter(|(_, slot)| band.intersects(slot.rect()))
+            .filter(|(id, slot)| self.present(id) && band.intersects(slot.rect()))
             .map(|(id, _)| *id)
             .collect()
     }
 
     /// Is this point on a card, rather than on the canvas between them?
     fn on_a_card(&self, at: egui::Pos2) -> bool {
-        self.slots.values().any(|slot| slot.rect().contains(at))
+        self.slots
+            .iter()
+            .any(|(id, slot)| self.present(id) && slot.rect().contains(at))
     }
 }
 
@@ -588,6 +650,8 @@ impl eframe::App for Board {
         }
         self.account_data.poll(now);
         self.past.poll(now);
+        self.control.poll(now);
+        self.settle_control_landing();
 
         // A live market never stops moving, so the board repaints steadily
         // rather than only on input - and faster while there are dots
@@ -642,6 +706,9 @@ impl Board {
             ui.add_space(14.0);
             let looking = self.looking_at();
             for (index, (label, _)) in VIEWS.iter().enumerate() {
+                if !self.zone_shown(index) {
+                    continue;
+                }
                 let here = looking == Some(index);
                 let button =
                     egui::Button::new(egui::RichText::new(*label).size(11.5).color(if here {
@@ -872,7 +939,7 @@ impl Board {
     /// sees.
     fn draw_selection(&self, ui: &egui::Ui) {
         let painter = ui.painter();
-        for id in &self.selected {
+        for id in self.selected.iter().filter(|id| self.present(id)) {
             let Some(slot) = self.slots.get(id) else {
                 continue;
             };
@@ -927,6 +994,9 @@ impl Board {
         self.paid_funding_card(ui);
         self.runs_card(ui);
         self.calendar_card(ui);
+        if self.control.available() {
+            self.control_card(ui, now);
+        }
         // Last, so the outlines sit on top of what they outline.
         self.draw_selection(ui);
     }
@@ -4323,6 +4393,26 @@ impl Board {
         self.put("ledger", slot);
     }
 
+    /// Start and stop the bot, check a strategy, put the keys in.
+    ///
+    /// The whole of what it does is in `control.rs`; this is the frame, and
+    /// the one place the board decides whether the panel exists. The caller
+    /// does not draw it unless the server has answered that it does.
+    fn control_card(&mut self, ui: &mut egui::Ui, now: f64) {
+        let mut slot = self.slot("control");
+        let (state, status) = self.control.state();
+        let control = &mut self.control;
+        card::show(
+            ui,
+            &mut slot,
+            "แผงควบคุมบอท",
+            &status,
+            state,
+            |ui| control.body(ui, now),
+        );
+        self.put("control", slot);
+    }
+
     /// The limits of the number above. On the screen, not in a footnote.
     fn notes_card(&mut self, ui: &mut egui::Ui) {
         let mut slot = self.slot("notes");
@@ -6611,9 +6701,25 @@ mod tests {
     fn the_bounds_hold_every_card() {
         let board = Board::default();
         let bounds = board.bounds();
-        for (id, slot) in &board.slots {
+        for (id, slot) in board.slots.iter().filter(|(id, _)| board.present(id)) {
             assert!(bounds.contains_rect(slot.rect()), "{id} หลุดออกนอกขอบเขต");
         }
+    }
+
+    /// The control panel's room is not part of the board until the server
+    /// says it has one - "พอดีจอ" must not fit a patch of empty canvas - and
+    /// is part of it afterwards.
+    #[test]
+    fn the_bounds_include_the_control_panel_only_when_there_is_one() {
+        let mut board = Board::default();
+        let slot = board.slots["control"].rect();
+        assert!(!board.bounds().contains_rect(slot));
+        assert!(!board.on_a_card(slot.center()), "การ์ดที่ไม่มีต้องไม่ดักการลาก");
+        assert!(board.cards_in(slot).is_empty());
+        hear_control(&mut board, 200, READY_CONTROL);
+        assert!(board.bounds().contains_rect(slot));
+        assert!(board.on_a_card(slot.center()));
+        assert!(board.cards_in(slot).contains("control"));
     }
 
     /// Is this point on a card? The question that decides whether the left
@@ -6881,7 +6987,7 @@ mod tests {
     #[test]
     fn each_zone_button_really_frames_the_cards_it_promises() {
         let board = Board::default();
-        let zones: [(usize, &[&str]); 5] = [
+        let zones: [(usize, &[&str]); 6] = [
             (
                 0,
                 &[
@@ -6901,6 +7007,7 @@ mod tests {
                 ],
             ),
             (4, &["runs", "calendar"]),
+            (5, &["control"]),
         ];
         for (index, ids) in zones {
             let frame = view(index);
@@ -7586,6 +7693,164 @@ mod tests {
         let before = board.scene_rect;
         assert!(!board.open_at("nowhere"));
         assert_eq!(board.scene_rect, before, "an unknown name changes nothing");
+    }
+
+    // ------------------------------------------------------ the control panel
+
+    /// What `GET /api/control` says on a board that can start the bot.
+    const READY_CONTROL: &str = r#"{
+        "setup": {"state": "ready", "detail": ""},
+        "job": null,
+        "output": [],
+        "keys": {"api_key": true, "private_key": true, "sub_account_id": false},
+        "halted": {"paper": false, "testnet": false}
+    }"#;
+
+    /// The server's answer, delivered without a server.
+    fn hear_control(board: &mut Board, status: u16, body: &str) {
+        board.control.hear(status, body);
+        board.settle_control_landing();
+    }
+
+    #[test]
+    fn a_board_whose_server_has_no_control_routes_shows_no_panel_at_all() {
+        let mut board = Board::default();
+        // Before the first answer: nothing, not a half-drawn card.
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(!painted.contains("แผงควบคุมบอท"), "{painted}");
+        assert!(!board.zone_shown(CONTROL_ZONE));
+
+        hear_control(&mut board, 404, "not found");
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(!painted.contains("แผงควบคุมบอท"), "{painted}");
+        assert!(!painted.contains("เริ่มบอท"), "{painted}");
+        assert!(!board.zone_shown(CONTROL_ZONE), "ไม่มีปุ่ม ควบคุม บนแถบบน");
+        assert!(!board.present("control"));
+    }
+
+    #[test]
+    fn a_board_whose_server_has_them_shows_the_panel_and_its_nav_button() {
+        let mut board = Board::default();
+        hear_control(&mut board, 200, READY_CONTROL);
+        assert!(board.zone_shown(CONTROL_ZONE));
+        let painted = painted_text(&mut board).join(" | ");
+        for want in [
+            "แผงควบคุมบอท",
+            "เริ่มบอท",
+            "หยุดบอท",
+            "ดึงข้อมูล + ตรวจกลยุทธ์",
+            "กระดาษ: กดเริ่มได้เลย ไม่ต้องใช้กุญแจ",
+            "กระดาษ (ไม่ใช้เงิน)",
+            "พร้อม",
+        ] {
+            assert!(painted.contains(want), "ไม่มี {want}: {painted}");
+        }
+    }
+
+    #[test]
+    fn the_control_zone_is_named_and_clear_of_every_other_zone() {
+        assert_eq!(VIEWS[CONTROL_ZONE].0, "ควบคุม");
+        assert_eq!(VIEW_ALIASES[CONTROL_ZONE], "control");
+        for (index, (label, _)) in VIEWS.iter().enumerate() {
+            if index != CONTROL_ZONE {
+                assert!(
+                    !view(index).intersects(view(CONTROL_ZONE)),
+                    "โซน {label} ทับโซนควบคุม"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_control_link_goes_to_the_panel_once_the_server_has_one() {
+        let mut board = Board::default();
+        assert!(board.open_at("#control"), "ยังไม่รู้ว่ามีไหม ก็พาไปรอก่อน");
+        assert_eq!(board.looking_at(), Some(CONTROL_ZONE));
+        hear_control(&mut board, 200, READY_CONTROL);
+        assert_eq!(board.looking_at(), Some(CONTROL_ZONE), "มีแผง ก็อยู่ที่เดิม");
+        assert!(!board.control_landing);
+
+        let mut thai = Board::default();
+        hear_control(&mut thai, 200, READY_CONTROL);
+        assert!(thai.open_at("ควบคุม"));
+        assert_eq!(thai.looking_at(), Some(CONTROL_ZONE));
+        assert!(thai.open_at("market"));
+        assert!(thai.open_at("#%E0%B8%84%E0%B8%A7%E0%B8%9A%E0%B8%84%E0%B8%B8%E0%B8%A1"));
+        assert_eq!(thai.looking_at(), Some(CONTROL_ZONE), "ชื่อไทยที่เบราว์เซอร์ส่งมา");
+    }
+
+    #[test]
+    fn a_control_link_on_a_board_without_one_lands_on_the_market() {
+        let mut board = Board::default();
+        assert!(board.open_at("#control"));
+        hear_control(&mut board, 404, "");
+        assert_eq!(
+            board.looking_at(),
+            Some(0),
+            "ไม่มีแผงก็กลับตลาด ไม่ปล่อยให้จ้องผ้าใบเปล่า"
+        );
+        assert!(!board.control_landing);
+
+        // Asked for after the answer is in: refused, nothing moves.
+        let before = board.scene_rect;
+        assert!(!board.open_at("control"));
+        assert_eq!(board.scene_rect, before);
+    }
+
+    #[test]
+    fn someone_who_walked_away_from_the_control_link_is_not_dragged_back() {
+        let mut board = Board::default();
+        board.open_at("#control");
+        // They pan over to the bot before the answer comes back.
+        board.scene_rect = view(1);
+        hear_control(&mut board, 404, "");
+        assert_eq!(board.looking_at(), Some(1));
+    }
+
+    #[test]
+    fn the_zone_button_for_the_control_panel_frames_the_whole_card() {
+        let board = Board::default();
+        assert!(
+            view(CONTROL_ZONE).contains_rect(board.slots["control"].rect()),
+            "ปุ่มควบคุมพาไปเห็นการ์ดไม่ครบ"
+        );
+    }
+
+    #[test]
+    fn a_layout_saved_with_the_control_panel_moved_is_kept() {
+        let mut board = Board::default();
+        board.restore(r#"{"control":{"x":-300.0,"y":4000.0,"w":1.0,"h":1.0}}"#);
+        assert_eq!(board.slots["control"].x, -300.0);
+        assert_eq!(
+            board.slots["control"].w,
+            Board::default().slots["control"].w,
+            "ขนาดเป็นของเวอร์ชันนี้"
+        );
+    }
+
+    #[test]
+    fn the_panel_header_follows_what_the_bot_is_doing() {
+        let mut board = Board::default();
+        hear_control(
+            &mut board,
+            200,
+            r#"{"setup":{"state":"ready","detail":""},
+                "job":{"action":"run","mode":"paper","started_at":"2026-11-17T04:00:00+00:00",
+                       "running":true,"exit_code":null,"stopping":false},
+                "output":["tick 12 price 67000"],"keys":{},"halted":{}}"#,
+        );
+        let painted = painted_text(&mut board).join(" | ");
+        assert!(painted.contains("กำลังรัน · กระดาษ"), "{painted}");
+        assert!(painted.contains("tick 12 price 67000"), "{painted}");
+    }
+
+    #[test]
+    fn the_panel_is_in_the_selection_band_only_while_it_exists() {
+        let mut board = Board::default();
+        let band = board.slots["control"].rect();
+        assert!(board.cards_in(band).is_empty());
+        hear_control(&mut board, 200, READY_CONTROL);
+        assert!(board.cards_in(band).contains("control"));
     }
 
     #[test]

@@ -13,6 +13,13 @@
 #                  ถ้ารันบอทด้วยคอนฟิกอื่น เช่น config	estnet.yaml ให้แก้บรรทัดข้างล่างตาม
 #   BOARD_ENV_FILE กุญแจของบัญชี อยู่ที่ ..\config\.env (ไม่มีก็เปิดได้ ดูข้างล่าง)
 
+param(
+    # สำหรับคนพัฒนา: เปิดโหมดควบคุม (ปุ่มเริ่ม/หยุดบอท) ผูกกับ 127.0.0.1 เท่านั้น
+    #   .\start.ps1 -Control
+    # ไม่ใส่ = บอร์ดอ่านอย่างเดียวเหมือนเดิม นักเรียนใช้ TradeBot.exe แทน ไม่ต้องใช้สวิตช์นี้
+    [switch]$Control
+)
+
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
@@ -50,9 +57,19 @@ if (Test-Path $keyFile) {
     Write-Host "ยังไม่มี config\.env · เปิดดูตลาดได้ตามปกติ ส่วนการ์ดบัญชีจะบอกว่ายังไม่ได้ตั้งกุญแจ" -ForegroundColor Yellow
 }
 
+if ($Control) {
+    # เซิร์ฟเวอร์จะเปิดโหมดควบคุมก็ต่อเมื่อมีทั้งสองอย่างนี้ (BOARD_CONTROL=1 และผูกกับ loopback)
+    $env:BOARD_CONTROL = "1"
+    $env:BOARD_BIND = "127.0.0.1"
+    $env:BOARD_BOT_ROOT = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    Write-Host "โหมดควบคุมเปิด: หน้าเว็บสั่งเริ่ม/หยุดบอทใน $($env:BOARD_BOT_ROOT) ได้ (เฉพาะ 127.0.0.1)" -ForegroundColor Yellow
+    Write-Host "บอทต้องมี .venv ก่อน: สร้างเองหรือเปิด TradeBot.exe หนึ่งครั้ง" -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "เปิดบอร์ดที่  http://127.0.0.1:4340" -ForegroundColor Cyan
 Write-Host "กด Ctrl+C เพื่อหยุด"
 Write-Host ""
 
-cargo run -p board-server
+# --bin board-server: the crate also builds TradeBot.exe, the launcher.
+cargo run -p board-server --bin board-server

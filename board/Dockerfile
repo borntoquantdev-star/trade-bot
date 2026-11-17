@@ -53,18 +53,25 @@ COPY server/Cargo.toml server/Cargo.toml
 
 # Warm the dependency cache with stub sources, so a code change does not
 # recompile the whole tree. Rust builds are slow enough to make this worth it.
-RUN mkdir -p app/src server/src \
+#
+# The server crate is a library plus two programs (see server/Cargo.toml), so
+# the stub needs all three files or cargo refuses to read the manifest. Only
+# `board-server` is built: `TradeBot` is the Windows double-click launcher and
+# has no business in a Linux image.
+RUN mkdir -p app/src server/src/bin \
  && echo "" > app/src/lib.rs \
  && echo "fn main() {}" > app/src/main.rs \
+ && echo "" > server/src/lib.rs \
  && echo "fn main() {}" > server/src/main.rs \
- && cargo build --release -p board-server \
+ && echo "fn main() {}" > server/src/bin/launcher.rs \
+ && cargo build --release -p board-server --bin board-server \
  && rm -rf app/src server/src
 
 COPY . .
 # Touch so cargo does not trust the stub fingerprints above.
 RUN find . -name "*.rs" -exec touch {} +
 
-RUN cargo build --release -p board-server
+RUN cargo build --release -p board-server --bin board-server
 RUN cd app && trunk build --release
 
 # ─── runtime ──────────────────────────────────────────────────────────────

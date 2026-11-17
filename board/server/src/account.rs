@@ -28,7 +28,7 @@
 //! money even if it escaped.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::Json;
@@ -88,51 +88,101 @@ pub struct Session {
     pub at: i64,
 }
 
+/// Where the key came from, kept so it can be read again.
+///
+/// Control mode lets a student paste a key into the board, and the very next
+/// card should show their account - not "restart the server". So the server
+/// remembers which files it looked in and can look again.
+#[derive(Debug, Default)]
+struct Source {
+    grvt_env: String,
+    files: Vec<PathBuf>,
+}
+
 #[derive(Clone, Default)]
 pub struct Account {
-    pub keys: Option<Keys>,
+    keys: Arc<RwLock<Option<Keys>>>,
     pub session: Arc<Mutex<Option<Session>>>,
+    source: Arc<Source>,
 }
 
 impl Account {
     /// Build from the environment. No key is a normal state, not a failure:
     /// the board is useful without one, it just cannot show an account.
     pub fn from_env(grvt_env: &str) -> Self {
-        let file = read_env_file();
-        let get = |name: &str| -> Option<String> {
-            std::env::var(name)
-                .ok()
-                .or_else(|| {
-                    file.iter()
-                        .find(|(key, _)| key == name)
-                        .map(|(_, value)| value.clone())
-                })
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-        };
+        Self::from_files(grvt_env, env_candidates())
+    }
 
-        let Some(api_key) = get("GRVT_API_KEY") else {
-            return Self::default();
+    /// Build from an explicit list of `.env` files, first match wins.
+    pub fn from_files(grvt_env: &str, files: Vec<PathBuf>) -> Self {
+        let source = Source {
+            grvt_env: grvt_env.to_owned(),
+            files,
         };
-        let prod = matches!(grvt_env, "prod" | "mainnet");
-        let host = |name: &str| {
-            if prod {
-                format!("https://{name}.grvt.io")
-            } else {
-                format!("https://{name}.testnet.grvt.io")
-            }
-        };
+        let keys = load_keys(&source);
         Self {
-            keys: Some(Keys {
-                api_key,
-                sub_account_id: get("GRVT_TRADING_ACCOUNT_ID")
-                    .or_else(|| get("GRVT_SUB_ACCOUNT_ID")),
-                trades_rest: host("trades"),
-                edge_rest: host("edge"),
-            }),
+            keys: Arc::new(RwLock::new(keys)),
             session: Arc::new(Mutex::new(None)),
+            source: Arc::new(source),
         }
     }
+
+    /// The credential as it stands now.
+    pub fn keys(&self) -> Option<Keys> {
+        self.keys
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Read the files again and forget the login the old key bought.
+    ///
+    /// The session goes too: a cookie that belongs to the previous key must
+    /// not answer for the new one.
+    pub async fn reload(&self) {
+        let fresh = load_keys(&self.source);
+        *self
+            .keys
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = fresh;
+        *self.session.lock().await = None;
+    }
+}
+
+fn load_keys(source: &Source) -> Option<Keys> {
+    let file = read_env_file(&source.files);
+    let get = |name: &str| -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .or_else(|| {
+                file.iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+            })
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+
+    let api_key = get("GRVT_API_KEY")?;
+    let prod = matches!(source.grvt_env.as_str(), "prod" | "mainnet");
+    let host = |name: &str| {
+        if prod {
+            format!("https://{name}.grvt.io")
+        } else {
+            format!("https://{name}.testnet.grvt.io")
+        }
+    };
+    Some(Keys {
+        api_key,
+        // "0" in GRVT_SUB_ACCOUNT_ID is the bot's own "not set" (its default,
+        // and what the board writes beside a fresh key). Asking the exchange
+        // about sub account 0 would answer nothing; better to let the login
+        // say which account the key belongs to.
+        sub_account_id: get("GRVT_TRADING_ACCOUNT_ID")
+            .or_else(|| get("GRVT_SUB_ACCOUNT_ID").filter(|id| id != "0")),
+        trades_rest: host("trades"),
+        edge_rest: host("edge"),
+    })
 }
 
 /// Where a `.env` might be, in the order a person would expect.
@@ -153,9 +203,9 @@ pub fn env_candidates() -> Vec<PathBuf> {
     found
 }
 
-fn read_env_file() -> Vec<(String, String)> {
-    for path in env_candidates() {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+fn read_env_file(files: &[PathBuf]) -> Vec<(String, String)> {
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
         let pairs = parse_env(&text);
@@ -254,7 +304,7 @@ pub async fn account(
     Query(ask): Query<Ask>,
     State(config): State<Config>,
 ) -> Json<Value> {
-    let Some(keys) = config.account.keys.clone() else {
+    let Some(keys) = config.account.keys() else {
         return absent(NO_KEY);
     };
 
@@ -533,6 +583,77 @@ mod tests {
 
     #[test]
     fn no_key_in_the_environment_is_a_board_without_an_account_not_an_error() {
-        assert!(Account::default().keys.is_none());
+        assert!(Account::default().keys().is_none());
+    }
+
+    /// A folder under the system's temp dir that removes itself.
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!(
+                "board-account-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_key_written_after_start_up_is_picked_up_without_a_restart() {
+        // A real key in the shell would answer before the file does, which
+        // is the right behaviour and the wrong thing to test against.
+        if std::env::var("GRVT_API_KEY").is_ok() {
+            return;
+        }
+        let scratch = Scratch::new("reload");
+        let file = scratch.0.join(".env");
+        let account = Account::from_files("testnet", vec![file.clone()]);
+        assert!(account.keys().is_none(), "no file, no key");
+
+        std::fs::write(&file, "GRVT_API_KEY=first-key-value\n").unwrap();
+        *account.session.lock().await = Some(Session::default());
+        account.reload().await;
+        assert_eq!(account.keys().unwrap().api_key, "first-key-value");
+        assert!(
+            account.session.lock().await.is_none(),
+            "the old key's login must not answer for the new key"
+        );
+
+        std::fs::write(&file, "GRVT_API_KEY=second-key-value\n").unwrap();
+        account.reload().await;
+        assert_eq!(account.keys().unwrap().api_key, "second-key-value");
+    }
+
+    #[test]
+    fn a_sub_account_of_zero_is_the_bots_way_of_saying_not_set() {
+        if std::env::var("GRVT_API_KEY").is_ok() || std::env::var("GRVT_TRADING_ACCOUNT_ID").is_ok()
+        {
+            return;
+        }
+        let scratch = Scratch::new("zero");
+        let file = scratch.0.join(".env");
+        std::fs::write(&file, "GRVT_API_KEY=k-1234567\nGRVT_SUB_ACCOUNT_ID=0\n").unwrap();
+        let keys = Account::from_files("testnet", vec![file.clone()])
+            .keys()
+            .unwrap();
+        assert_eq!(keys.sub_account_id, None, "0 means ask the login instead");
+
+        std::fs::write(
+            &file,
+            "GRVT_API_KEY=k-1234567\nGRVT_TRADING_ACCOUNT_ID=5421993573613261\nGRVT_SUB_ACCOUNT_ID=0\n",
+        )
+        .unwrap();
+        let keys = Account::from_files("testnet", vec![file]).keys().unwrap();
+        assert_eq!(keys.sub_account_id.as_deref(), Some("5421993573613261"));
     }
 }

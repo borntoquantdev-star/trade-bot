@@ -1,61 +1,20 @@
-//! Serves the board.
+//! `board-server`: the board's server, configured from the environment.
 //!
-//! Two jobs, and deliberately no more:
+//! This is the binary Railway and Docker run, and what `board/start.ps1`
+//! starts. It binds `0.0.0.0` unless told otherwise and is read-only: it
+//! serves the page and the files the bot wrote, and never sends an order.
 //!
-//! 1. Hand the browser the WASM bundle built by trunk.
-//! 2. Read the files the bot already writes (`logs/audit.jsonl`,
-//!    `logs/state.json`, `logs/backtest.json`) and hand them over as JSON.
-//!
-//! It never connects to an exchange and never holds a credential. The board
-//! in the browser talks to GRVT's **public** market-data stream directly, so
-//! nothing that could place an order passes through here. A student can point
-//! this at a folder and watch; that is the whole contract.
+//! Control mode (start and stop the bot from the board) needs **both**
+//! `BOARD_CONTROL=1` and a loopback bind (`BOARD_BIND=127.0.0.1`); on the
+//! default `0.0.0.0` it is refused, so a hosted board cannot grow it by
+//! accident. Students do not use this binary for that - they double-click
+//! `TradeBot.exe`, which is the same server with control mode on.
 
-use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::routing::get;
-use axum::{Json, Router};
-use tower_http::services::{ServeDir, ServeFile};
-
-mod account;
-mod bot;
-mod candles;
-mod code;
-mod history;
-mod kline;
-mod market;
-mod trace;
-
-#[derive(Clone)]
-pub struct Config {
-    /// Where the bot writes its logs.
-    pub logs: PathBuf,
-    /// Where the bot keeps the candle history it downloaded.
-    pub candles: PathBuf,
-    /// Where the bot's own source lives, so the stage cards can show the
-    /// function that ran. Read only, `.py` only, and never written to.
-    pub code: PathBuf,
-    /// Hours east of UTC that a calendar day starts at. Thailand, +7, by
-    /// default: a day that began at midnight UTC would begin at seven in the
-    /// morning for everyone reading this board.
-    pub utc_offset_hours: i64,
-    /// The bot's config file, relative to `code`. Read for two strings: the
-    /// exchange and the strategy, which is what lets the cards show the
-    /// right code before the bot has ever run.
-    pub config_file: String,
-    /// GRVT's public market-data REST root, e.g.
-    /// `https://market-data.testnet.grvt.io`.
-    pub market_data_rest: String,
-    /// One client, reused: a new one per request would open a new TLS
-    /// connection every time the chart refreshes.
-    pub http: reqwest::Client,
-    /// The credential, if there is one, and the session it bought. Lives
-    /// here and only here: see `account.rs`.
-    pub account: account::Account,
-}
+use board_server::control::Control;
+use board_server::{account, control_enabled, serve_on, Settings};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -70,6 +29,12 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(4340);
+    let ip: IpAddr = std::env::var("BOARD_BIND")
+        .ok()
+        .and_then(|bind| bind.trim().parse().ok())
+        .unwrap_or_else(|| IpAddr::from([0, 0, 0, 0]));
+    let addr = SocketAddr::new(ip, port);
+
     let dist = PathBuf::from(std::env::var("BOARD_DIST").unwrap_or_else(|_| "dist".into()));
     let logs = PathBuf::from(std::env::var("BOARD_LOGS").unwrap_or_else(|_| "logs".into()));
     let candle_root =
@@ -80,49 +45,39 @@ async fn main() -> anyhow::Result<()> {
     let config_file = std::env::var("BOARD_CONFIG").unwrap_or_else(|_| "config/config.yaml".into());
 
     let grvt_env = std::env::var("BOARD_GRVT_ENV").unwrap_or_else(|_| "testnet".into());
-    let market_data_rest = match grvt_env.as_str() {
-        "prod" | "mainnet" => "https://market-data.grvt.io".to_string(),
-        _ => "https://market-data.testnet.grvt.io".to_string(),
+
+    let wants_control = std::env::var("BOARD_CONTROL").is_ok_and(|value| value.trim() == "1");
+    let control = if wants_control {
+        // BOARD_BOT_ROOT is the folder the bot runs from, which is what
+        // BOARD_CODE already says; either names it.
+        let root = std::env::var("BOARD_BOT_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| code_root.clone());
+        Some(Control::new(root))
+    } else {
+        None
     };
 
-    let account = account::Account::from_env(&grvt_env);
-    let config = Config {
-        logs: logs.clone(),
-        candles: candle_root.clone(),
-        code: code_root.clone(),
-        config_file: config_file.clone(),
-        utc_offset_hours: std::env::var("BOARD_UTC_OFFSET")
-            .ok()
-            .and_then(|hours| hours.trim().parse().ok())
-            .unwrap_or(7),
-        market_data_rest: market_data_rest.clone(),
-        http: reqwest::Client::builder()
-            .user_agent("tradebot-board")
-            .build()?,
-        account: account.clone(),
-    };
+    // Keys written from the board go to <root>/config/.env, so that is the
+    // file read first when control is on - otherwise a key saved from the
+    // page would land somewhere the server does not look.
+    let mut env_files = account::env_candidates();
+    if let Some(control) = &control {
+        env_files.insert(0, control.env_path());
+    }
+    let account = account::Account::from_files(&grvt_env, env_files);
+
+    // On a non-loopback bind `serve_on` refuses control mode again, and says
+    // so; this only decides whether to announce it.
+    if let (true, Some(control)) = (control_enabled(wants_control, addr), &control) {
+        control.refresh_setup();
+        tracing::info!(
+            "control mode ON: the board can start and stop the bot in {}",
+            control.root().display()
+        );
+    }
 
     let index = dist.join("index.html");
-    let app = Router::new()
-        .route("/api/health", get(health))
-        .route("/api/state", get(state))
-        .route("/api/backtest", get(bot::backtest))
-        .route("/api/audit", get(audit))
-        .route("/api/code", get(code::code))
-        .route("/api/stages", get(code::stages))
-        .route("/api/runs", get(history::runs))
-        .route("/api/days", get(history::days))
-        .route("/api/trace", get(trace::trace))
-        .route("/api/candles", get(candles::candles))
-        .route("/api/candles/available", get(candles::available))
-        .route("/api/kline", get(kline::kline))
-        .route("/api/market/{kind}", get(market::market))
-        .route("/api/account/{kind}", get(account::account))
-        .with_state(config)
-        // Anything not an API route is the single-page app.
-        .fallback_service(ServeDir::new(&dist).fallback(ServeFile::new(&index)));
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(
         "board on http://{addr}  dist={}  logs={}  candles={}  code={}",
         dist.display(),
@@ -131,8 +86,11 @@ async fn main() -> anyhow::Result<()> {
         code_root.display()
     );
     tracing::info!("the five stage cards read {config_file} to know whose code to show");
-    tracing::info!("public market data: {market_data_rest} (BOARD_GRVT_ENV={grvt_env})");
-    match &account.keys {
+    tracing::info!(
+        "public market data: {} (BOARD_GRVT_ENV={grvt_env})",
+        board_server::market_data_rest(&grvt_env)
+    );
+    match account.keys() {
         Some(keys) => tracing::info!(
             "account data: {} (key found, read only - this server never sends an order)",
             keys.trades_rest
@@ -149,85 +107,26 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    let settings = Settings {
+        dist,
+        logs,
+        candles: candle_root,
+        code: code_root,
+        config_file,
+        utc_offset_hours: std::env::var("BOARD_UTC_OFFSET")
+            .ok()
+            .and_then(|hours| hours.trim().parse().ok())
+            .unwrap_or(7),
+        grvt_env,
+        account,
+        control,
+    };
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
-        .await?;
-    Ok(())
+    serve_on(listener, settings, shutdown()).await
 }
 
 async fn shutdown() {
     let _ = tokio::signal::ctrl_c().await;
     tracing::info!("stopping");
-}
-
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "ok": true }))
-}
-
-/// A missing file is not an error: the bot may simply not have run yet.
-/// Saying so plainly beats a 500 that looks like the board is broken.
-async fn read_json(path: &Path) -> Json<serde_json::Value> {
-    match tokio::fs::read_to_string(path).await {
-        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(value) => Json(serde_json::json!({ "present": true, "data": value })),
-            Err(err) => Json(serde_json::json!({
-                "present": false,
-                "reason": format!("ไฟล์มีแต่อ่านไม่ออก: {err}"),
-            })),
-        },
-        Err(_) => Json(serde_json::json!({
-            "present": false,
-            "reason": format!("ยังไม่มี {}", path.display()),
-        })),
-    }
-}
-
-async fn state(State(config): State<Config>) -> Json<serde_json::Value> {
-    read_json(&bot::state_path(&config.logs)).await
-}
-
-/// The audit trail is JSON Lines, newest last. Only the tail is sent: the
-/// board draws a few hundred rows, and shipping a 50 MB file to a browser
-/// helps nobody.
-async fn audit(State(config): State<Config>) -> Result<Json<serde_json::Value>, StatusCode> {
-    const KEEP: usize = 500;
-    let path = config.logs.join("audit.jsonl");
-    let Ok(text) = tokio::fs::read_to_string(&path).await else {
-        return Ok(Json(serde_json::json!({
-            "present": false,
-            "reason": format!("ยังไม่มี {}", path.display()),
-            "rows": [],
-        })));
-    };
-
-    let mut rows: Vec<serde_json::Value> = Vec::new();
-    let mut unreadable = 0usize;
-    for line in text.lines().rev() {
-        if rows.len() >= KEEP {
-            break;
-        }
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match serde_json::from_str(line) {
-            Ok(mut value) => {
-                // Each trace is fifteen times the rest of its row, and the
-                // board shows one tick at a time: it asks /api/trace for
-                // the one it is showing. See trace.rs.
-                trace::slim(&mut value);
-                rows.push(value)
-            }
-            // One broken line must not make the whole trail unreadable.
-            Err(_) => unreadable += 1,
-        }
-    }
-    rows.reverse();
-
-    Ok(Json(serde_json::json!({
-        "present": true,
-        "rows": rows,
-        "unreadable": unreadable,
-    })))
 }
