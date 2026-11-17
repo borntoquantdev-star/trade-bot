@@ -18,6 +18,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from ..money import D
+from ..types import RejectCode
 from .result import BacktestResult, Trade
 
 #: Below this, the statistics are anecdotes.  Chosen to be visibly arbitrary
@@ -129,7 +130,10 @@ def summary(result: BacktestResult) -> str:
         lines.append("HALTED")
         lines.append(f"  at {result.halted_at:%Y-%m-%d %H:%M} UTC")
         lines.append(f"  {result.halt_reason}")
-        lines.append("  The live bot would have stopped here and waited for a human.")
+        if result.halt_reason.startswith(f"{RejectCode.DAILY_LOSS_LIMIT.value}:"):
+            lines.append("  The live bot would have stopped here until midnight, Thai time.")
+        else:
+            lines.append("  The live bot would have stopped here and waited for a human.")
         lines.append("")
 
     for warning in result.warnings:

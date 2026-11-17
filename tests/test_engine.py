@@ -674,3 +674,99 @@ def test_a_tick_that_sends_nothing_carries_no_timing(tmp_path):
     engine.tick()
     row = _rows(tmp_path)[0]
     assert "order" not in row and "exit" not in row
+
+
+# --- a daily-loss halt lasts one day ------------------------------------------
+
+
+def _blow_the_daily_budget(tmp_path):
+    engine, broker, ticks = make_engine(
+        tmp_path,
+        prices=[100_000, 100_000, 100_000, 100_000],
+        config_data={"risk": {"max_daily_loss_pct": 1.0, "max_drawdown_pct": 50.0}},
+    )
+    engine.tick()  # opens
+    broker.close_position(SYMBOL)
+    broker._equity = D("9800")  # 2% down: past the daily stop, nowhere near the drawdown floor
+    ticks["now"] = START + timedelta(minutes=1)
+    result = engine.tick()
+    assert result.reject.code is RejectCode.DAILY_LOSS_LIMIT
+    assert engine.state.halted is True
+    return engine, broker, ticks
+
+
+def test_a_daily_loss_halt_names_the_day_it_happened(tmp_path):
+    engine, _, _ = _blow_the_daily_budget(tmp_path)
+    assert engine.state.halt_day == "2026-11-04"
+    assert "realised loss on 2026-11-04" in engine.state.halt_reason
+    assert "today" not in engine.state.halt_reason
+
+
+def test_a_daily_loss_halt_holds_for_the_rest_of_its_day(tmp_path):
+    engine, _, ticks = _blow_the_daily_budget(tmp_path)
+    ticks["now"] = datetime(2026, 11, 4, 16, 59, tzinfo=timezone.utc)  # 23:59 in Bangkok
+    assert engine.tick().reject.code is RejectCode.HALTED
+    assert engine.state.halted is True
+
+
+def test_a_daily_loss_halt_lifts_itself_at_thai_midnight(tmp_path):
+    engine, _, ticks = _blow_the_daily_budget(tmp_path)
+    ticks["now"] = datetime(2026, 11, 4, 17, 0, tzinfo=timezone.utc)  # 00:00 in Bangkok
+    result = engine.tick()
+    assert engine.state.halted is False
+    assert result.receipt is not None
+    assert EngineState.load(tmp_path / "state.json").halted is False
+
+
+def test_a_daily_loss_halt_from_yesterday_is_lifted_on_start(tmp_path):
+    _blow_the_daily_budget(tmp_path)
+    engine, _, _ = make_engine(tmp_path, clock_start=START + timedelta(days=1))
+    assert engine.state.halted is False
+    assert engine.state.halt_day == ""
+
+
+def test_a_drawdown_halt_waits_for_a_human_however_many_days_pass(tmp_path):
+    engine, _, ticks = make_engine(tmp_path)
+    engine.halt("max_drawdown: equity 8000 is at or below the drawdown floor")
+    ticks["now"] = START + timedelta(days=3)
+    assert engine.tick().reject.code is RejectCode.HALTED
+    assert engine.state.halted is True
+
+
+def test_a_human_halt_waits_for_a_human_too(tmp_path):
+    engine, _, ticks = make_engine(tmp_path)
+    engine.halt("manual test")
+    ticks["now"] = START + timedelta(days=1)
+    assert engine.tick().reject.code is RejectCode.HALTED
+
+
+def test_a_daily_halt_without_its_day_is_left_alone(tmp_path):
+    # A state file from before halt_day existed cannot say when it began.
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "day": "2026-11-03",
+                "halted": True,
+                "halt_reason": "daily_loss_limit: today's realised loss -308",
+            }
+        ),
+        encoding="utf-8",
+    )
+    engine, _, _ = make_engine(tmp_path)
+    assert engine.state.halted is True
+    assert engine.tick().reject.code is RejectCode.HALTED
+
+
+def test_resume_forgets_the_halt_day(tmp_path):
+    engine, _, _ = _blow_the_daily_budget(tmp_path)
+    engine.resume()
+    assert EngineState.load(tmp_path / "state.json").halt_day == ""
+
+
+def test_the_start_up_hint_names_a_flag_that_exists(tmp_path, caplog):
+    engine, _, _ = make_engine(tmp_path)
+    engine.halt("manual test")
+    with caplog.at_level("ERROR"):
+        engine.start()
+    assert "--resume" in caplog.text
+    assert "`tradebot resume`" not in caplog.text

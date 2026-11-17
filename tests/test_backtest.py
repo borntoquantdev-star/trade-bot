@@ -242,6 +242,22 @@ def test_it_stops_where_the_live_engine_would_halt():
     assert result.was_halted
     assert "max_drawdown" in result.halt_reason
     assert "HALTED" in summary(result)
+    assert "waited for a human" in summary(result)
+
+
+def test_a_daily_loss_halt_is_reported_as_lasting_until_midnight():
+    rows = [("100", "100", "100", "100")] * 3
+    rows += [("100", "100", "70", "70")]
+    rows += [("70", "70", "70", "70")] * 4
+    result = run_backtest(
+        candles(rows),
+        EveryBar(stop="50"),
+        config_for(max_drawdown_pct=5.0, risk_per_trade_pct=20.0),
+    )
+    result.halt_reason = "daily_loss_limit: realised loss on 2026-10-12 -300 has reached ..."
+    text = summary(result)
+    assert "until midnight, Thai time" in text
+    assert "waited for a human" not in text
 
 
 def test_the_run_continues_past_a_limit_when_halting_is_switched_off():

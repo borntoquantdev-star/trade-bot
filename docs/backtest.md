@@ -73,14 +73,16 @@ does not show.
 
 ## When the backtest halts
 
-The live engine stops trading and waits for a human when the gate reports
-`max_drawdown` or `daily_loss_limit`. The backtest does the same, and says so:
+The live engine stops trading when the gate reports `max_drawdown` or
+`daily_loss_limit`. A drawdown halt waits for a human; a daily-loss halt lifts
+itself at the next midnight, Thai time, when the day's budget starts again.
+The backtest stops at the first of either, and says so:
 
 ```
 HALTED
   at 2026-10-12 05:00 UTC
-  daily_loss_limit: today's realised loss ... has reached the daily budget ...
-  The live bot would have stopped here and waited for a human.
+  daily_loss_limit: realised loss on 2026-10-12 ... has reached the daily budget ...
+  The live bot would have stopped here.
 ```
 
 A backtest that carried on would report profits the bot was never going to be

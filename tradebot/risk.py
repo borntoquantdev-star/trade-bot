@@ -146,7 +146,7 @@ def risk_gate(
     if state.realized_pnl_today <= -daily_budget:
         return Reject(
             RejectCode.DAILY_LOSS_LIMIT,
-            f"today's realised loss {show(state.realized_pnl_today)} has reached "
+            f"realised loss on {trading_day(now)} {show(state.realized_pnl_today)} has reached "
             f"the daily budget of -{show(daily_budget)}",
         )
 

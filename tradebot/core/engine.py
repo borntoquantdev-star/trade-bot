@@ -61,6 +61,10 @@ class EngineState:
     peak_equity: Decimal = ZERO
     halted: bool = False
     halt_reason: str = ""
+    #: The trading day the halt began.  A daily-loss halt lifts itself once
+    #: the day has moved on; without the day it began there is no telling
+    #: whether that has happened, so a halt with none stays put.
+    halt_day: str = ""
     sent_order_ids: list[str] = field(default_factory=list)
     #: Which modules this bot is running, written at start-up.
     #:
@@ -87,6 +91,7 @@ class EngineState:
             peak_equity=D(raw.get("peak_equity", 0)),
             halted=bool(raw.get("halted", False)),
             halt_reason=str(raw.get("halt_reason", "")),
+            halt_day=str(raw.get("halt_day", "")),
             sent_order_ids=list(raw.get("sent_order_ids", []))[-500:],
             strategy_module=str(raw.get("strategy_module", "")),
             broker_module=str(raw.get("broker_module", "")),
@@ -102,6 +107,7 @@ class EngineState:
             "peak_equity": format(self.peak_equity, "f"),
             "halted": self.halted,
             "halt_reason": self.halt_reason,
+            "halt_day": self.halt_day,
             "sent_order_ids": self.sent_order_ids[-500:],
             "strategy_module": self.strategy_module,
             "broker_module": self.broker_module,
@@ -224,11 +230,13 @@ class Engine:
         # watching knows whose code to show without being told.
         self.state.strategy_module = type(self.strategy).__module__
         self.state.broker_module = type(self.broker).__module__
+        self._lift_daily_halt(trading_day(self.clock()))
         self.state.save(self.state_path)
         if self.state.halted:
             self.log.error(
-                "state file says trading is HALTED: %s. Clear it with "
-                "`tradebot resume` once you know why.",
+                "state file says trading is HALTED: %s. Once you know why, clear it "
+                "with `tradebot --config <the same file> --resume` (add --live for "
+                "an exchange account).",
                 self.state.halt_reason,
             )
 
@@ -502,13 +510,35 @@ class Engine:
             self.log.critical("HALTING: %s", reason)
         self.state.halted = True
         self.state.halt_reason = reason
+        self.state.halt_day = trading_day(self.clock())
         self.state.save(self.state_path)
 
     def resume(self) -> None:
-        """Clear a halt (used by ``tradebot resume``)."""
+        """Clear a halt (used by ``tradebot --resume``)."""
         self.state.halted = False
         self.state.halt_reason = ""
+        self.state.halt_day = ""
         self.state.save(self.state_path)
+
+    def _lift_daily_halt(self, today: str) -> None:
+        """Lift a daily-loss halt once its day is over.
+
+        The daily budget is a budget for one day: at midnight, Thai time, it
+        starts again, so a halt that exists only because yesterday's budget
+        ran out has nothing left to protect.  Every other halt - the drawdown
+        kill switch, repeated failures, a human's - still waits for a human.
+        """
+        state = self.state
+        if not (state.halted and state.halt_day and state.halt_day != today):
+            return
+        if not state.halt_reason.startswith(f"{RejectCode.DAILY_LOSS_LIMIT.value}:"):
+            return
+        self.log.warning(
+            "lifting the daily-loss halt from %s: a new day (%s) has a new budget",
+            state.halt_day,
+            today,
+        )
+        self.resume()
 
     def _roll_day(self, now: datetime, equity: Decimal) -> None:
         """Start a new daily loss budget at each midnight, Thai time."""
@@ -517,6 +547,7 @@ class Engine:
             self.state.day = today
             self.state.day_start_equity = equity
             self.log.info("new trading day %s, starting equity %s", today, equity)
+        self._lift_daily_halt(today)
         if self.state.peak_equity <= ZERO:
             self.state.peak_equity = equity
 
