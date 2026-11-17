@@ -85,6 +85,10 @@ class PingPongStrategy(Strategy):
     def get_signal(self, market: MarketView) -> Signal | None:
         if market.in_position:
             return None
+        # Flat. The engine only asks get_exit while a position is open, so this
+        # is where the last trade's hold clock has to be forgotten - otherwise
+        # the next trade starts out already "held" past max_hold_seconds.
+        self._opened_at = None
 
         middle = self.average(market)
         if middle is None or middle <= 0:

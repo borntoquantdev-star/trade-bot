@@ -148,6 +148,17 @@ def test_the_hold_clock_starts_again_for_the_next_trade() -> None:
     )
 
 
+def test_the_hold_clock_restarts_the_way_the_engine_calls_it() -> None:
+    # The engine never shows get_exit a flat book: while flat it only asks
+    # get_signal. The clock still has to be forgotten between trades.
+    strategy = PingPongStrategy(window=20, max_hold_seconds=180)
+    held = long_at("99.90")
+    strategy.get_exit(view("99.85", flat(20, "99.90"), held, NOW))
+    strategy.get_signal(view("100", flat(20), None, NOW + timedelta(seconds=200)))
+    later = NOW + timedelta(seconds=300)
+    assert strategy.get_exit(view("99.85", flat(20, "99.90"), held, later)) is None
+
+
 def test_an_average_of_zero_cannot_divide_the_strategy_by_zero() -> None:
     strategy = PingPongStrategy(window=2)
     assert strategy.get_signal(view("0", ["0", "0"])) is None
