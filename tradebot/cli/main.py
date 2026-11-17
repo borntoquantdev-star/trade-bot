@@ -101,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="where each tick's trace goes, so the audit trail stays readable",
     )
     parser.add_argument(
+        "--stop-file",
+        default="logs/stop.request",
+        help="end the run politely when this file appears (the board's stop button)",
+    )
+    parser.add_argument(
         "--close-at-end",
         action="store_true",
         help="close the position when the run stops (after --iterations, or Ctrl+C)",
@@ -196,11 +201,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _wrong_folder_hint(path: str) -> str:
+    """Say where the command ran and where it should have.
+
+    A relative --config is read from the folder the command runs in, and the
+    usual way to miss it is to be one folder off - in board/, say - with the
+    file sitting right there in the bot's folder.
+    """
+    here = Path.cwd()
+    bot = Path(__file__).resolve().parents[2]
+    if not Path(path).is_absolute() and (bot / path).exists() and bot != here:
+        return (
+            f"this command ran in {here}, but {path} is in {bot}. "
+            f'Run it from there:  cd "{bot}"'
+        )
+    return f"this command ran in {here}; --config is read relative to that folder"
+
+
 def _load(args: argparse.Namespace, log: logging.Logger) -> BotConfig | None:
     path: str | None = args.config
     if path and not Path(path).exists():
         if args.config != DEFAULT_CONFIG:
             log.error("config file not found: %s", path)
+            log.error("%s", _wrong_folder_hint(path))
             return None
         log.warning(
             "no %s yet - running on built-in defaults. "
@@ -336,6 +359,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         audit_path=Path(args.audit_file) if args.audit_file else None,
         trace=args.trace,
         trace_path=Path(args.trace_file) if args.trace_file else None,
+        stop_path=Path(args.stop_file) if args.stop_file else None,
     )
 
     if args.resume:
@@ -389,7 +413,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     reason = "stopped"
     try:
         code = engine.run(max_iterations=args.iterations)
-        reason = "halted" if engine.state.halted else "finished"
+        reason = (
+            "halted"
+            if engine.state.halted
+            else "stopped from the board" if engine.stopped_on_request else "finished"
+        )
         # Asked for up front, when the run was started, rather than with a
         # --yes at the end: the person chose this run and its ending in the
         # same command. Only on a normal return - after an exception the

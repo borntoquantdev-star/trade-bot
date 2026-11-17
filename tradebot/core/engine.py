@@ -176,6 +176,7 @@ class Engine:
         max_consecutive_errors: int = 5,
         trace: bool = False,
         trace_path: Path | None = None,
+        stop_path: Path | None = None,
     ) -> None:
         self.config = config
         self.broker = broker
@@ -199,6 +200,12 @@ class Engine:
         # inside the row, as it did before the file existed.
         self.trace_enabled = trace
         self.trace_path = Path(trace_path) if trace_path else None
+        # A file whose appearance means "stop when you can".  The board's
+        # stop button writes it: a polite stop that lets the run end the way
+        # it was started (--close-at-end included), where killing the
+        # process would leave a position for nobody to look after.
+        self.stop_path = Path(stop_path) if stop_path else None
+        self.stopped_on_request = False
         self._trace = Trace(enabled=False)
         # The market this tick was decided on, kept only so `_record` can
         # ask the strategy what it was looking at (see `_view`).
@@ -435,8 +442,14 @@ class Engine:
         """
         interval = self.config.trading.loop_interval
         iteration = 0
+        # A request left over from a run that ended before it was read is
+        # not a request to this run.
+        if self.stop_path is not None:
+            self.stop_path.unlink(missing_ok=True)
         try:
             while max_iterations is None or iteration < max_iterations:
+                if self._stop_requested():
+                    return 0
                 iteration += 1
                 self.log.debug("iteration %s", iteration)
                 try:
@@ -454,7 +467,7 @@ class Engine:
                     self.log.error("halted - stopping the loop")
                     return 1
                 if max_iterations is None or iteration < max_iterations:
-                    sleeper(interval)
+                    self._nap(interval, sleeper)
             return 0
         except KeyboardInterrupt:
             self.log.info("stopped by user")
@@ -462,6 +475,32 @@ class Engine:
         finally:
             self.strategy.cleanup()
             self.state.save(self.state_path)
+
+    def _stop_requested(self) -> bool:
+        if self.stop_path is None or not self.stop_path.exists():
+            return False
+        self.stop_path.unlink(missing_ok=True)
+        self.stopped_on_request = True
+        self.log.info("stop requested (%s) - ending the run", self.stop_path)
+        return True
+
+    def _nap(self, interval: float, sleeper: Sleeper) -> None:
+        """Sleep between ticks, waking early if a stop is requested.
+
+        Without a stop file this is one plain sleep.  With one it sleeps in
+        short steps, so a stop button pressed a minute before the next tick
+        does not take a minute to answer.
+        """
+        if self.stop_path is None:
+            sleeper(interval)
+            return
+        step = 0.5
+        left = float(interval)
+        while left > 0:
+            if self.stop_path.exists():
+                return
+            sleeper(min(step, left))
+            left -= step
 
     def flatten(self, reason: str) -> TickResult | None:
         """Close the configured symbol's position, if there is one.

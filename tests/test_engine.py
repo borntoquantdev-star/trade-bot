@@ -770,3 +770,51 @@ def test_the_start_up_hint_names_a_flag_that_exists(tmp_path, caplog):
         engine.start()
     assert "--resume" in caplog.text
     assert "`tradebot resume`" not in caplog.text
+
+
+# --- a polite stop ----------------------------------------------------------
+
+
+def _engine_with_stop(tmp_path):
+    engine, broker, ticks = make_engine(tmp_path, strategy=ScriptedStrategy(side=None))
+    engine.stop_path = tmp_path / "stop.request"
+    return engine
+
+
+def test_a_stop_file_ends_the_loop_before_the_next_tick(tmp_path):
+    engine = _engine_with_stop(tmp_path)
+
+    def press_stop(seconds):
+        engine.stop_path.write_text("", encoding="utf-8")
+
+    assert engine.run(max_iterations=10, sleeper=press_stop) == 0
+    assert engine.ticks == 1
+    assert engine.stopped_on_request is True
+    assert not engine.stop_path.exists()
+
+
+def test_a_stop_file_left_from_an_earlier_run_is_ignored(tmp_path):
+    engine = _engine_with_stop(tmp_path)
+    engine.stop_path.write_text("", encoding="utf-8")
+    assert engine.run(max_iterations=2, sleeper=lambda s: None) == 0
+    assert engine.ticks == 2
+    assert engine.stopped_on_request is False
+
+
+def test_waiting_for_the_next_tick_wakes_early_on_a_stop(tmp_path):
+    engine = _engine_with_stop(tmp_path)
+    slept: list[float] = []
+
+    def nap(seconds):
+        slept.append(seconds)
+        engine.stop_path.write_text("", encoding="utf-8")
+
+    engine._nap(60, nap)
+    assert slept == [0.5]
+
+
+def test_without_a_stop_file_the_wait_is_one_plain_sleep(tmp_path):
+    engine, _, _ = make_engine(tmp_path)
+    slept: list[float] = []
+    engine._nap(60, slept.append)
+    assert slept == [60]

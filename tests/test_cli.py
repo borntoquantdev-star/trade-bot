@@ -5,7 +5,10 @@ cover the paths a user actually types - including the ones that must refuse to
 do anything.
 """
 
+import json
 import logging
+import threading
+from pathlib import Path
 
 import pytest
 
@@ -83,6 +86,8 @@ def paths(tmp_path):
         str(tmp_path / "runs.jsonl"),
         "--trace-file",
         str(tmp_path / "trace.jsonl"),
+        "--stop-file",
+        str(tmp_path / "stop.request"),
     ]
 
 
@@ -371,3 +376,42 @@ def test_live_still_refuses_a_config_whose_keys_are_not_set(tmp_path, config_fil
     path = config_file(KEYLESS_CONFIG)
     assert main(["--config", path, "--live", "--iterations", "1", *paths(tmp_path)]) == 2
     assert "environment variable is not set" in capsys.readouterr().out
+
+
+# --- the board's stop button, and the folder a command runs in ----------------
+
+
+def test_a_stop_request_ends_the_run_and_says_so(tmp_path, config_file):
+    stop = tmp_path / "stop.request"
+    # Pressed while the run waits for its next tick, as the board's button is.
+    press = threading.Timer(0.3, lambda: stop.write_text("", encoding="utf-8"))
+    press.start()
+    try:
+        code = main(
+            [
+                "--config",
+                config_file(TESTNET_CONFIG),
+                "--dry-run",
+                "--strategy",
+                "random",
+                *paths(tmp_path),
+            ]
+        )
+    finally:
+        press.cancel()
+    assert code == 0
+    assert not stop.exists()
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "runs.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["reason"].startswith("stopped from the board")
+
+
+def test_a_config_one_folder_off_says_where_to_run_from(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["--config", "config/testnet.yaml", "--dry-run", *paths(tmp_path)]) == 2
+    out = capsys.readouterr().out
+    bot = Path(__file__).resolve().parents[1]
+    assert "config file not found" in out
+    assert str(bot) in out and "cd " in out
