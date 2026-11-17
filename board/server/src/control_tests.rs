@@ -175,7 +175,7 @@ fn the_two_secrets_are_scrubbed_from_whatever_the_bot_prints() {
 
 #[test]
 fn each_action_runs_exactly_the_command_the_contract_names() {
-    let run = |action, mode| command_args(action, mode).join(" ");
+    let run = |action, mode| command_args(action, mode, None).join(" ");
     assert_eq!(
         run(Action::Run, Mode::Paper),
         "--config config/demo.yaml --dry-run --paper-live --close-at-end"
@@ -855,7 +855,7 @@ fn the_fetch_is_two_days_of_testnet_candles_and_the_check_is_unchanged() {
         "--config config/testnet.yaml --live --fetch-candles --days 2"
     );
     assert_eq!(
-        command_args(Action::Check, Mode::Testnet).join(" "),
+        command_args(Action::Check, Mode::Testnet, None).join(" "),
         "--config config/testnet.yaml --check"
     );
 }
@@ -991,7 +991,7 @@ async fn a_stop_during_the_first_step_ends_the_job_and_the_check_never_starts() 
 async fn a_check_without_keys_says_so_and_runs_only_the_check() {
     let scratch = Scratch::new("check-nokeys");
     let control = controller(&scratch, slow().0, KILL_AFTER);
-    control.start(Action::Check, Mode::Paper).unwrap();
+    control.start(Action::Check, Mode::Paper, None).unwrap();
     let snapshot = wait_until_ended(&control).await;
     assert_eq!(snapshot["job"]["action"], "check");
     assert_eq!(snapshot["job"]["mode"], "testnet");
@@ -1013,7 +1013,7 @@ async fn a_check_with_keys_fetches_two_days_then_runs_the_check_in_one_job() {
     std::fs::create_dir_all(scratch.env().parent().unwrap()).unwrap();
     std::fs::write(scratch.env(), ALL_THREE).unwrap();
     let control = controller(&scratch, slow().0, KILL_AFTER);
-    control.start(Action::Check, Mode::Testnet).unwrap();
+    control.start(Action::Check, Mode::Testnet, None).unwrap();
     let snapshot = wait_until_ended(&control).await;
     assert_eq!(snapshot["job"]["action"], "check");
     let output = lines_of(&snapshot);
@@ -1036,4 +1036,273 @@ async fn a_check_with_keys_fetches_two_days_then_runs_the_check_in_one_job() {
             "{output:?}"
         );
     }
+}
+
+// -- strategies --------------------------------------------------------------
+
+const LISTING_JSON: &str = r#"{"config": "config/testnet.yaml", "strategies": [{"name": "ma_cross", "description": "fast/slow SMA crossover", "file": "tradebot/strategies/ma_cross.py", "check": {"passed": false, "why": "never passed"}}, {"name": "ping_pong", "description": "tester", "file": "tradebot/strategies/ping_pong.py", "check": {"passed": true, "why": ""}}, {"name": "mine", "description": "", "file": "tradebot/strategies/mine.py", "check": null}, {"name": "Bad Name", "description": "x", "file": "x", "check": null}]}"#;
+
+/// Put a listing in place as if the bot had printed it.
+fn know(control: &Control, names: &[&str]) {
+    let list = names
+        .iter()
+        .map(|name| json!({"name": name, "description": "", "file": "", "check": null}))
+        .collect();
+    control.lock().strategies.listing = Some(Listing { list, error: None });
+}
+
+/// A stand-in `tradebot` that prints `text` on stdout and exits with `code`.
+fn fake_bot(scratch: &Scratch, text: &str, code: i32) -> PathBuf {
+    if cfg!(windows) {
+        let path = scratch.0.join("fake-bot.cmd");
+        let script = format!("@echo off\r\necho {text}\r\nexit /b {code}\r\n");
+        std::fs::write(&path, script).unwrap();
+        path
+    } else {
+        let path = scratch.0.join("fake-bot.sh");
+        let script = format!("#!/bin/sh\necho '{text}'\nexit {code}\n");
+        std::fs::write(&path, script).unwrap();
+        make_executable(&path);
+        path
+    }
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) {}
+
+async fn wait_for_listing(control: &Control) -> Value {
+    for _ in 0..200 {
+        let snapshot = control.snapshot().await;
+        if !snapshot["strategies"].is_null() && !control.lock().strategies.busy {
+            return snapshot;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no listing in 10 s");
+}
+
+#[test]
+fn a_strategy_is_added_to_a_run_and_a_check_and_never_to_a_resume() {
+    let run = |action, mode, name| command_args(action, mode, name).join(" ");
+    assert_eq!(
+        run(Action::Run, Mode::Paper, Some("ma_cross")),
+        "--config config/demo.yaml --dry-run --paper-live --close-at-end --strategy ma_cross"
+    );
+    assert_eq!(
+        run(Action::Run, Mode::Testnet, Some("ping_pong")),
+        "--config config/testnet.yaml --live --close-at-end --strategy ping_pong"
+    );
+    assert_eq!(
+        run(Action::Check, Mode::Testnet, Some("mine")),
+        "--config config/testnet.yaml --check --strategy mine"
+    );
+    assert_eq!(
+        run(Action::Resume, Mode::Testnet, Some("mine")),
+        "--config config/testnet.yaml --live --resume"
+    );
+    assert_eq!(
+        list_args().join(" "),
+        "--list-strategies --json --config config/testnet.yaml"
+    );
+}
+
+#[test]
+fn the_listing_keeps_four_fields_and_drops_a_name_that_could_not_be_passed_on() {
+    let rows = parse_listing(&format!("warning: something\n{LISTING_JSON}\n")).unwrap();
+    let names: Vec<&str> = rows.iter().filter_map(|r| r["name"].as_str()).collect();
+    assert_eq!(names, ["ma_cross", "ping_pong", "mine"]);
+    assert_eq!(rows[0]["check"]["passed"], json!(false));
+    assert_eq!(rows[0]["check"]["why"], "never passed");
+    assert_eq!(rows[1]["check"]["passed"], json!(true));
+    assert_eq!(rows[2]["check"], Value::Null);
+    assert_eq!(rows[0]["file"], "tradebot/strategies/ma_cross.py");
+
+    for text in ["", "not json", "{\"strategies\": 3}", "{}"] {
+        assert!(parse_listing(text).is_err(), "{text:?}");
+    }
+}
+
+#[test]
+fn only_lowercase_digits_and_underscore_up_to_64_are_a_strategy_name() {
+    for good in ["a", "ma_cross", "x9_", &"a".repeat(64)] {
+        assert!(valid_strategy_name(good), "{good}");
+    }
+    for bad in ["", "Ma", "a-b", "a b", "a/b", "..", "ไทย", &"a".repeat(65)] {
+        assert!(!valid_strategy_name(bad), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_strategy_not_in_the_listing_or_badly_spelled_is_a_400_and_nothing_starts() {
+    let scratch = Scratch::new("strategy-400");
+    let control = controller(&scratch, slow().0, KILL_AFTER);
+    let app = routes(control.clone(), Account::default());
+
+    // Before any listing every name is unknown.
+    let body = r#"{"mode":"paper","strategy":"ping_pong"}"#;
+    let (status, reply) = send(&app, post("/api/control/run", body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
+    assert_eq!(reply["ok"], json!(false));
+
+    know(&control, &["ping_pong"]);
+    for body in [
+        r#"{"mode":"paper","strategy":"nope"}"#,
+        r#"{"mode":"paper","strategy":"Ping_Pong"}"#,
+        r#"{"mode":"paper","strategy":"ping_pong; calc"}"#,
+        r#"{"mode":"paper","strategy":"../x"}"#,
+        r#"{"mode":"paper","strategy":7}"#,
+        r#"{"mode":"paper","strategy":""}"#,
+    ] {
+        let (status, _) = send(&app, post("/api/control/run", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+    let (status, _) = send(&app, post("/api/control/check", r#"{"strategy":"nope"}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = send(&app, post("/api/control/check", "{broken")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let snapshot = control.snapshot().await;
+    assert_eq!(snapshot["job"], Value::Null, "nothing was spawned");
+}
+
+#[tokio::test]
+async fn a_listed_strategy_reaches_the_command_and_the_job_says_which_it_is() {
+    let scratch = Scratch::new("strategy-ok");
+    let control = controller(&scratch, slow().0, KILL_AFTER);
+    know(&control, &["ping_pong", "mine"]);
+    let app = routes(control.clone(), Account::default());
+
+    let body = r#"{"mode":"testnet","strategy":"mine"}"#;
+    let (status, reply) = send(&app, post("/api/control/run", body)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["job"]["strategy"], "mine");
+    let output = lines_of(&wait_until_ended(&control).await);
+    let want = "> tradebot --config config/testnet.yaml --live --close-at-end --strategy mine";
+    assert!(output.iter().any(|line| line == want), "{output:?}");
+
+    // Without a strategy: today's command, and `strategy: null`.
+    let (status, reply) = send(&app, post("/api/control/run", r#"{"mode":"paper"}"#)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["job"]["strategy"], Value::Null);
+    let output = lines_of(&wait_until_ended(&control).await);
+    let want = "> tradebot --config config/demo.yaml --dry-run --paper-live --close-at-end";
+    assert!(output.iter().any(|line| line == want), "{output:?}");
+
+    // A check with an empty body is still fine; with a strategy it is added
+    // to the check and not to the candle download.
+    let (status, _) = send(&app, post("/api/control/check", "")).await;
+    assert_eq!(status, StatusCode::OK);
+    wait_until_ended(&control).await;
+    std::fs::create_dir_all(scratch.env().parent().unwrap()).unwrap();
+    std::fs::write(scratch.env(), ALL_THREE).unwrap();
+    let body = r#"{"strategy":"ping_pong"}"#;
+    let (status, reply) = send(&app, post("/api/control/check", body)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["job"]["strategy"], "ping_pong");
+    let output = lines_of(&wait_until_ended(&control).await);
+    let fetch = "> tradebot --config config/testnet.yaml --live --fetch-candles --days 2";
+    let check = "> tradebot --config config/testnet.yaml --check --strategy ping_pong";
+    assert!(output.iter().any(|line| line == fetch), "{output:?}");
+    assert!(output.iter().any(|line| line == check), "{output:?}");
+}
+
+#[tokio::test]
+async fn the_page_polling_gets_a_listing_in_the_background_and_not_before_setup() {
+    // Not installed: no listing, and nothing is run to get one.
+    let scratch = Scratch::new("listing-missing");
+    let control = Control::new(&scratch.0);
+    let snapshot = control.snapshot().await;
+    assert_eq!(snapshot["strategies"], Value::Null);
+    assert!(!control.lock().strategies.busy);
+
+    let scratch = Scratch::new("listing-ok");
+    let bot = fake_bot(&scratch, LISTING_JSON.trim(), 0);
+    let control = controller(&scratch, bot, KILL_AFTER);
+    // The first poll answers at once with null and starts the refresh.
+    assert_eq!(control.snapshot().await["strategies"], Value::Null);
+    let snapshot = wait_for_listing(&control).await;
+    assert_eq!(snapshot["strategies"]["error"], Value::Null);
+    let list = snapshot["strategies"]["list"].as_array().unwrap();
+    assert_eq!(list.len(), 3);
+    assert_eq!(list[1]["name"], "ping_pong");
+
+    // Polling again does not run it again.
+    let before = control.lock().strategies.last_attempt;
+    control.snapshot().await;
+    assert_eq!(control.lock().strategies.last_attempt, before);
+}
+
+#[tokio::test]
+async fn a_failed_listing_is_an_error_string_and_the_list_is_empty() {
+    let scratch = Scratch::new("listing-fails");
+    let control = controller(&scratch, fake_bot(&scratch, "boom", 3), KILL_AFTER);
+    control.snapshot().await;
+    let snapshot = wait_for_listing(&control).await;
+    assert_eq!(snapshot["strategies"]["list"], json!([]));
+    let error = snapshot["strategies"]["error"].as_str().unwrap();
+    assert!(error.contains("exit code 3"), "{error}");
+
+    let scratch = Scratch::new("listing-garbage");
+    let control = controller(&scratch, fake_bot(&scratch, "hello", 0), KILL_AFTER);
+    control.snapshot().await;
+    let snapshot = wait_for_listing(&control).await;
+    assert!(snapshot["strategies"]["error"].is_string());
+}
+
+#[tokio::test]
+async fn a_finished_job_or_a_changed_strategy_file_makes_the_listing_stale() {
+    let scratch = Scratch::new("listing-stale");
+    let dir = scratch.0.join("tradebot").join("strategies");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.py"), "# a\n").unwrap();
+    let bot = fake_bot(&scratch, LISTING_JSON.trim(), 0);
+    let control = controller(&scratch, bot, KILL_AFTER);
+    control.snapshot().await;
+    wait_for_listing(&control).await;
+    let first = control.lock().strategies.last_attempt;
+
+    // Nothing changed: no new attempt.
+    control.snapshot().await;
+    assert_eq!(control.lock().strategies.last_attempt, first);
+
+    // A job ends: the next poll refreshes.
+    control.finish(0, 0);
+    control.snapshot().await;
+    wait_for_listing(&control).await;
+    let second = control.lock().strategies.last_attempt;
+    assert_ne!(second, first);
+
+    // A new file: refreshed again.
+    std::fs::write(dir.join("mine.py"), "# mine\n").unwrap();
+    control.snapshot().await;
+    wait_for_listing(&control).await;
+    let third = control.lock().strategies.last_attempt;
+    assert_ne!(third, second);
+
+    // A subfolder (the bot's __pycache__) is not a strategy file.
+    std::fs::create_dir_all(dir.join("__pycache__")).unwrap();
+    std::fs::write(dir.join("__pycache__").join("a.pyc"), "x").unwrap();
+    control.snapshot().await;
+    wait_for_listing(&control).await;
+    assert_eq!(control.lock().strategies.last_attempt, third);
+
+    // A check report written by a terminal run counts too.
+    let logs = scratch.0.join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("check-mine.json"), "{}").unwrap();
+    control.snapshot().await;
+    wait_for_listing(&control).await;
+    let fourth = control.lock().strategies.last_attempt;
+    assert_ne!(fourth, third);
+    // Other logs do not.
+    std::fs::write(logs.join("state.json"), "{}").unwrap();
+    control.snapshot().await;
+    wait_for_listing(&control).await;
+    assert_eq!(control.lock().strategies.last_attempt, fourth);
 }

@@ -17,7 +17,7 @@ before.
 
 from __future__ import annotations
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 from .money import D
 from .risk import client_order_id, risk_gate

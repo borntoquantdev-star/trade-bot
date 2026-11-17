@@ -50,7 +50,7 @@ const VIEWS: [(&str, [f32; 5]); 6] = [
     ("ประวัติ", [20.0, 3290.0, 1430.0, 3750.0, 0.0]),
     // Start and stop the bot. Below everything else and drawn only where the
     // board's own server offers it: see `Board::zone_shown`.
-    ("ควบคุม", [20.0, 3800.0, 1160.0, 4500.0, 0.0]),
+    ("ควบคุม", [20.0, 3800.0, 1160.0, 4600.0, 0.0]),
 ];
 
 /// Which of `VIEWS` is the control panel.
@@ -332,7 +332,7 @@ impl Default for Board {
         // The control panel, below the history. Always in the layout so a
         // saved position survives; drawn and counted only when the server
         // has it.
-        slots.insert("control", Slot::new(40.0, 3850.0, 1100.0, 600.0));
+        slots.insert("control", Slot::new(40.0, 3850.0, 1100.0, 700.0));
         Self {
             // Opens on the market, not zoomed out to fit everything: eleven
             // cards at once is a map, not a screen.

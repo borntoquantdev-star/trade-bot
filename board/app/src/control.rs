@@ -129,6 +129,9 @@ pub struct Job {
     /// `paper` or `testnet`.
     #[serde(default)]
     pub mode: String,
+    /// The strategy it was asked to run, or `None` for the config's own.
+    #[serde(default)]
+    pub strategy: Option<String>,
     #[serde(default)]
     pub started_at: String,
     #[serde(default)]
@@ -178,6 +181,158 @@ impl Halted {
     }
 }
 
+/// What `tradebot --check` last said about a strategy, for testnet.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct StrategyCheck {
+    #[serde(default)]
+    pub passed: bool,
+    #[serde(default)]
+    pub why: String,
+}
+
+/// One strategy the bot knows, as the server relays it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct StrategyRow {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub file: String,
+    /// `None`: the bot could not say (its config could not be read).
+    #[serde(default)]
+    pub check: Option<StrategyCheck>,
+}
+
+/// The server's last listing of the bot's strategies. Absent from an answer
+/// until the first listing is in.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Strategies {
+    #[serde(default)]
+    pub list: Vec<StrategyRow>,
+    /// Why the latest listing failed, if it did. The rows are the last good
+    /// ones.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Has a strategy passed the check that stands in front of testnet?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckState {
+    Passed,
+    NotPassed,
+    Unknown,
+}
+
+impl CheckState {
+    /// The word, and the colour of it: green, amber, grey. Never the accent:
+    /// that colour is the board's own, not a verdict.
+    fn word(self) -> (&'static str, Color32) {
+        match self {
+            CheckState::Passed => ("ผ่านด่านแล้ว", theme::OK),
+            CheckState::NotPassed => ("ยังไม่ผ่าน", theme::WARN),
+            CheckState::Unknown => ("ไม่รู้", theme::FAINT),
+        }
+    }
+}
+
+impl StrategyRow {
+    pub fn check_state(&self) -> CheckState {
+        match &self.check {
+            Some(check) if check.passed => CheckState::Passed,
+            Some(_) => CheckState::NotPassed,
+            None => CheckState::Unknown,
+        }
+    }
+}
+
+/// The two worked examples, in the order students meet them: the name the
+/// bot uses, what to call it, and the line under it.
+const CASE_STUDIES: [(&str, &str, &str); 2] = [
+    (
+        "ping_pong",
+        "กรณีศึกษา 1",
+        "เครื่องทดสอบ เข้าออกถี่ให้เห็นกลไก ไม่ใช่กลยุทธ์ทำเงิน",
+    ),
+    (
+        "ma_cross",
+        "กรณีศึกษา 2",
+        "ตามเทรนด์ เส้นค่าเฉลี่ยเร็วตัดเส้นช้า อาจรอหลายนาทีกว่าจะมีไม้",
+    ),
+];
+
+/// Only there to prove the plumbing works; never offered.
+const HIDDEN_STRATEGY: &str = "random";
+
+/// Strategies of the student's own that are listed before the rest are
+/// summed up in a line, so the card cannot grow without end.
+const MAX_OWN_SHOWN: usize = 5;
+
+/// What to say when the student has written none yet.
+const OWN_HINT: &str = "อยากได้กลยุทธ์ของตัวเอง? คุยกับ AI ด้วย /bot:strategy แล้วมันจะโผล่ในรายการนี้ \
+                        ต้องผ่าน /bot:check หรือปุ่มตรวจก่อนรัน testnet";
+
+/// One line of the picker, ready to draw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickRow {
+    pub name: String,
+    pub title: String,
+    pub detail: String,
+    pub state: CheckState,
+    pub why: String,
+}
+
+/// The picker's rows: the case studies first, the student's own after, the
+/// plumbing test not at all. Also how many of the student's own were left
+/// out for want of room.
+pub fn pick_rows(strategies: &Strategies) -> (Vec<PickRow>, usize) {
+    let mut rows = Vec::new();
+    for (name, label, detail) in CASE_STUDIES {
+        if let Some(row) = strategies.list.iter().find(|row| row.name == name) {
+            rows.push(PickRow {
+                name: row.name.clone(),
+                title: format!("{label} · {name}"),
+                detail: detail.to_owned(),
+                state: row.check_state(),
+                why: row
+                    .check
+                    .as_ref()
+                    .map(|c| c.why.clone())
+                    .unwrap_or_default(),
+            });
+        }
+    }
+    let own: Vec<&StrategyRow> = strategies
+        .list
+        .iter()
+        .filter(|row| {
+            row.name != HIDDEN_STRATEGY && !CASE_STUDIES.iter().any(|case| case.0 == row.name)
+        })
+        .collect();
+    let left_out = own.len().saturating_sub(MAX_OWN_SHOWN);
+    for row in own.into_iter().take(MAX_OWN_SHOWN) {
+        let description: String = row.description.chars().take(90).collect();
+        let detail = [description.as_str(), row.file.as_str()]
+            .iter()
+            .filter(|part| !part.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        rows.push(PickRow {
+            name: row.name.clone(),
+            title: format!("ของคุณ · {}", row.name),
+            detail,
+            state: row.check_state(),
+            why: row
+                .check
+                .as_ref()
+                .map(|c| c.why.clone())
+                .unwrap_or_default(),
+        });
+    }
+    (rows, left_out)
+}
+
 /// One answer from `GET /api/control`.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Snapshot {
@@ -191,6 +346,9 @@ pub struct Snapshot {
     pub keys: KeysSet,
     #[serde(default)]
     pub halted: Halted,
+    /// `None` until the server has listed the strategies once.
+    #[serde(default)]
+    pub strategies: Option<Strategies>,
 }
 
 impl Snapshot {
@@ -494,6 +652,9 @@ pub struct Control {
     /// passed is still a check that passed once a run has taken its place.
     /// `None` until a job has said.
     checked: Option<bool>,
+    /// The strategy picked in the list. Only a request to start or check
+    /// sends it; see `selected`.
+    pick: Option<String>,
     note: Option<Note>,
     tx: Sender<Got>,
     rx: Receiver<Got>,
@@ -512,6 +673,7 @@ impl Default for Control {
             mode: Mode::default(),
             form: Form::default(),
             checked: None,
+            pick: None,
             note: None,
             tx,
             rx,
@@ -647,10 +809,70 @@ impl Control {
         if checking {
             return Step::Check;
         }
-        match self.checked {
-            Some(true) => Step::Start,
-            _ => Step::Check,
+        // With the strategies listed, the question is about the one picked.
+        // Without (an older server, or the first moments), the newest jobs
+        // are all there is to go on.
+        let passed = match self.selected_row() {
+            Some(row) => row.check_state() == CheckState::Passed,
+            None => self.checked == Some(true),
+        };
+        if passed {
+            Step::Start
+        } else {
+            Step::Check
         }
+    }
+
+    /// The rows the picker offers, if the server has listed any.
+    fn offered(&self) -> Vec<PickRow> {
+        self.snapshot
+            .strategies
+            .as_ref()
+            .map(|strategies| pick_rows(strategies).0)
+            .unwrap_or_default()
+    }
+
+    /// The strategy the next start or check is about: what the running job
+    /// runs; else what was picked, if it is still offered; else the first
+    /// case study (or whatever comes first). `None` when nothing is listed,
+    /// in which case no `strategy` is sent and the config decides.
+    pub fn selected(&self) -> Option<String> {
+        let rows = self.offered();
+        if let Some(name) = self
+            .snapshot
+            .running_job()
+            .and_then(|job| job.strategy.clone())
+        {
+            return Some(name);
+        }
+        if let Some(name) = self
+            .pick
+            .as_ref()
+            .filter(|name| rows.iter().any(|row| &row.name == *name))
+        {
+            return Some(name.clone());
+        }
+        rows.iter()
+            .find(|row| row.name == CASE_STUDIES[0].0)
+            .or(rows.first())
+            .map(|row| row.name.clone())
+    }
+
+    fn selected_row(&self) -> Option<&StrategyRow> {
+        let name = self.selected()?;
+        self.snapshot
+            .strategies
+            .as_ref()?
+            .list
+            .iter()
+            .find(|row| row.name == name)
+    }
+
+    /// What testnet will say about the selection: the check state, if there
+    /// is a selection to ask about.
+    pub fn selected_state(&self) -> Option<(String, CheckState)> {
+        let row = self.selected_row()?;
+        Some((row.name.clone(), row.check_state()))
     }
 
     /// How the newest finished job ended, in words.
@@ -902,9 +1124,18 @@ impl Control {
         );
         ui.add_space(2.0);
 
+        self.strategy_picker(ui, gates.pick_mode);
+        ui.add_space(2.0);
+
         let mode = self.shown_mode();
         let stopping = self.snapshot.running_job().is_some_and(|job| job.stopping);
         let halted = self.snapshot.halted.of(mode);
+        let chosen = self.selected();
+        let needs_check = mode == Mode::Testnet
+            && self.snapshot.running_job().is_none()
+            && self
+                .selected_state()
+                .is_some_and(|(_, state)| state != CheckState::Passed);
         let mut sent: Option<(Kind, Value)> = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -912,7 +1143,10 @@ impl Control {
                 .add_enabled(gates.start, action_button("เริ่มบอท", theme::OK))
                 .clicked()
             {
-                sent = Some((Kind::Run, json!({ "mode": mode.wire() })));
+                sent = Some((
+                    Kind::Run,
+                    with_strategy(json!({ "mode": mode.wire() }), &chosen),
+                ));
             }
             let stop = if stopping {
                 "กำลังหยุดและปิดไม้..."
@@ -925,11 +1159,14 @@ impl Control {
             {
                 sent = Some((Kind::Stop, json!({})));
             }
-            if ui
-                .add_enabled(gates.check, neutral_button("ดึงข้อมูล + ตรวจกลยุทธ์"))
-                .clicked()
-            {
-                sent = Some((Kind::Check, json!({})));
+            // The button the student needs next is the one that stands out.
+            let check_button = if needs_check {
+                action_button("ดึงข้อมูล + ตรวจกลยุทธ์", theme::ACCENT)
+            } else {
+                neutral_button("ดึงข้อมูล + ตรวจกลยุทธ์")
+            };
+            if ui.add_enabled(gates.check, check_button).clicked() {
+                sent = Some((Kind::Check, with_strategy(json!({}), &chosen)));
             }
             if halted
                 && ui
@@ -943,7 +1180,83 @@ impl Control {
             self.send(kind, body, now);
         }
 
+        if needs_check {
+            if let Some(text) = self.check_guidance() {
+                ui.label(RichText::new(text).size(11.0).color(theme::WARN));
+            }
+        }
         self.status_lines(ui, mode, halted);
+    }
+
+    /// What to tell a student who picked a strategy testnet would refuse:
+    /// where the check is, before the bot says no.
+    fn check_guidance(&self) -> Option<String> {
+        let (name, state) = self.selected_state()?;
+        match state {
+            CheckState::Passed => None,
+            CheckState::NotPassed => Some(format!(
+                "testnet ต้องให้ {name} ผ่านด่านตรวจก่อน · กด ดึงข้อมูล + ตรวจกลยุทธ์ แล้วค่อยกด เริ่มบอท"
+            )),
+            CheckState::Unknown => Some(format!(
+                "ยังไม่รู้ว่า {name} ผ่านด่านตรวจหรือยัง · กด ดึงข้อมูล + ตรวจกลยุทธ์ ก่อนเริ่มบอทบน testnet"
+            )),
+        }
+    }
+
+    /// The list of strategies to run: two case studies to watch, then the
+    /// student's own. Locked while a bot is running, like the mode.
+    fn strategy_picker(&mut self, ui: &mut Ui, enabled: bool) {
+        section(
+            ui,
+            "เลือกกลยุทธ์ · สถานะคือด่านตรวจของ testnet (กระดาษไม่ต้องตรวจ)",
+        );
+        let Some(strategies) = self.snapshot.strategies.clone() else {
+            if self.snapshot.setup.state == SetupState::Ready {
+                ui.label(
+                    RichText::new("กำลังอ่านรายการกลยุทธ์จากบอท...")
+                        .size(10.5)
+                        .color(theme::DIM),
+                );
+            }
+            return;
+        };
+        let (rows, left_out) = pick_rows(&strategies);
+        let mut pick = self.selected();
+        ui.add_enabled_ui(enabled, |ui| {
+            for row in &rows {
+                let response = ui.radio_value(&mut pick, Some(row.name.clone()), pick_job(row));
+                if !row.why.is_empty() {
+                    response.on_hover_text(&row.why);
+                }
+            }
+        });
+        if enabled {
+            self.pick = pick;
+        }
+        let own = rows.len()
+            - rows
+                .iter()
+                .filter(|row| CASE_STUDIES.iter().any(|case| case.0 == row.name))
+                .count();
+        if own == 0 {
+            ui.label(RichText::new(OWN_HINT).size(10.5).color(theme::DIM));
+        }
+        if left_out > 0 {
+            ui.label(
+                RichText::new(format!(
+                    "และอีก {left_out} กลยุทธ์ · อยู่ในโฟลเดอร์ tradebot/strategies"
+                ))
+                .size(10.5)
+                .color(theme::DIM),
+            );
+        }
+        if let Some(error) = strategies.error.as_deref() {
+            ui.label(
+                RichText::new(format!("อ่านรายการกลยุทธ์ล่าสุดไม่สำเร็จ · {error}"))
+                    .size(10.5)
+                    .color(theme::WARN),
+            );
+        }
     }
 
     /// Where the programs are: hidden when they are ready.
@@ -981,6 +1294,10 @@ impl Control {
                 "check" => "กำลังดึงแท่งเทียนและตรวจกลยุทธ์...".to_owned(),
                 "resume" => "กำลังปลดล็อก".to_owned(),
                 _ => format!("กำลังรัน · {}", mode_label(&job.mode)),
+            };
+            let what = match job.strategy.as_deref() {
+                Some(name) => format!("{what} · {name}"),
+                None => what,
             };
             let started = crate::time::hhmm(&job.started_at);
             let text = if started.is_empty() {
@@ -1157,6 +1474,33 @@ impl Control {
     }
 }
 
+/// A request body with the picked strategy in it, if there is one.
+fn with_strategy(mut body: Value, strategy: &Option<String>) -> Value {
+    if let (Some(name), Some(map)) = (strategy, body.as_object_mut()) {
+        map.insert("strategy".to_owned(), Value::String(name.clone()));
+    }
+    body
+}
+
+/// A picker row as one widget: the name and the check state on a line, what
+/// it is under it.
+fn pick_job(row: &PickRow) -> LayoutJob {
+    let (word, colour) = row.state.word();
+    let mut job = LayoutJob::default();
+    let format = |size: f32, color: Color32| TextFormat {
+        font_id: FontId::proportional(size),
+        color,
+        ..Default::default()
+    };
+    job.append(&row.title, 0.0, format(12.0, theme::TEXT));
+    job.append("  ·  ", 0.0, format(10.5, theme::FAINT));
+    job.append(word, 0.0, format(10.5, colour));
+    if !row.detail.is_empty() {
+        job.append(&format!("\n{}", row.detail), 0.0, format(10.5, theme::DIM));
+    }
+    job
+}
+
 fn note_colour(note: &Note) -> Color32 {
     if note.good {
         theme::OK
@@ -1274,6 +1618,36 @@ mod tests {
         fn walk(shape: &egui::Shape, found: &mut Vec<String>) {
             match shape {
                 egui::Shape::Text(text) => found.push(text.galley.text().to_owned()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, found)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut found);
+        }
+        found
+    }
+
+    /// The height the card hands `body`: the slot's 700, less the card's head and padding (30 + 10 + 10).
+    const SLOT_BODY_HEIGHT: f32 = 650.0;
+
+    /// Every piece of text one frame painted, with the y it was painted at.
+    fn painted_at(control: &mut Control, now: f64) -> Vec<(String, f32)> {
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx);
+        let mut warm = ctx.run_ui(egui::RawInput::default(), |_| {});
+        warm.textures_delta.clear();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let area =
+                Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1076.0, SLOT_BODY_HEIGHT));
+            ui.scope_builder(UiBuilder::new().max_rect(area), |ui| control.body(ui, now));
+        });
+        output.textures_delta.clear();
+
+        fn walk(shape: &egui::Shape, found: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::Shape::Text(text) => found.push((text.galley.text().to_owned(), text.pos.y)),
                 egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, found)),
                 _ => {}
             }
@@ -2230,5 +2604,329 @@ mod tests {
         {
             assert!(text.contains(want), "{want}: {text}");
         }
+    }
+
+    // ----------------------------------------------------- the strategy picker
+
+    fn listing(rows: &[(&str, Option<bool>)]) -> Value {
+        let list: Vec<Value> = rows
+            .iter()
+            .map(|(name, passed)| {
+                json!({
+                    "name": name,
+                    "description": format!("{name} in English"),
+                    "file": format!("tradebot/strategies/{name}.py"),
+                    "check": passed.map(|passed| json!({"passed": passed, "why": "because"})),
+                })
+            })
+            .collect();
+        json!({ "list": list, "error": null })
+    }
+
+    /// An answer with strategies in it.
+    fn with_strategies(job: Value, rows: &[(&str, Option<bool>)]) -> String {
+        json!({
+            "setup": {"state": "ready", "detail": ""},
+            "job": job,
+            "output": [],
+            "keys": {"api_key": true, "private_key": true, "sub_account_id": true},
+            "halted": {"paper": false, "testnet": false},
+            "strategies": listing(rows),
+        })
+        .to_string()
+    }
+
+    const THREE: [(&str, Option<bool>); 3] = [
+        ("ma_cross", Some(false)),
+        ("ping_pong", Some(true)),
+        ("random", Some(false)),
+    ];
+
+    #[test]
+    fn the_answer_carries_the_strategies_and_the_jobs_own() {
+        let none = Snapshot::parse(READY).unwrap();
+        assert!(none.strategies.is_none(), "ยังไม่มีรายการ");
+        let null =
+            Snapshot::parse(&READY.replace("\"halted\"", "\"strategies\": null, \"halted\""));
+        assert!(null.unwrap().strategies.is_none());
+
+        let body = with_strategies(
+            json!({"action": "run", "mode": "testnet", "strategy": "ma_cross", "running": true,
+                   "exit_code": null, "started_at": "", "stopping": false}),
+            &[("ma_cross", None)],
+        );
+        let snapshot = Snapshot::parse(&body).unwrap();
+        assert_eq!(snapshot.job.unwrap().strategy.as_deref(), Some("ma_cross"));
+        let strategies = snapshot.strategies.unwrap();
+        assert_eq!(strategies.list[0].name, "ma_cross");
+        assert_eq!(strategies.list[0].check_state(), CheckState::Unknown);
+        assert!(strategies.error.is_none());
+        // A job from before strategies existed has none.
+        let old = Snapshot::parse(&running("run", "paper")).unwrap();
+        assert!(old.job.unwrap().strategy.is_none());
+    }
+
+    #[test]
+    fn the_rows_are_case_studies_first_the_students_own_after_and_never_random() {
+        let strategies: Strategies = serde_json::from_value(listing(&[
+            ("random", Some(false)),
+            ("zeta", Some(true)),
+            ("ma_cross", Some(false)),
+            ("alpha", None),
+            ("ping_pong", Some(true)),
+        ]))
+        .unwrap();
+        let (rows, left_out) = pick_rows(&strategies);
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["ping_pong", "ma_cross", "zeta", "alpha"]);
+        assert_eq!(left_out, 0);
+        assert_eq!(rows[0].title, "กรณีศึกษา 1 · ping_pong");
+        assert_eq!(rows[0].detail, "เครื่องทดสอบ เข้าออกถี่ให้เห็นกลไก ไม่ใช่กลยุทธ์ทำเงิน");
+        assert_eq!(rows[1].title, "กรณีศึกษา 2 · ma_cross");
+        assert_eq!(
+            rows[1].detail,
+            "ตามเทรนด์ เส้นค่าเฉลี่ยเร็วตัดเส้นช้า อาจรอหลายนาทีกว่าจะมีไม้"
+        );
+        assert_eq!(rows[2].title, "ของคุณ · zeta");
+        assert_eq!(
+            rows[2].detail,
+            "zeta in English · tradebot/strategies/zeta.py"
+        );
+        assert_eq!(
+            [rows[0].state, rows[1].state, rows[3].state],
+            [
+                CheckState::Passed,
+                CheckState::NotPassed,
+                CheckState::Unknown
+            ]
+        );
+
+        // Too many of their own: the rest are counted, not drawn.
+        let many: Vec<(String, Option<bool>)> =
+            (0..8).map(|n| (format!("mine{n}"), Some(true))).collect();
+        let many: Vec<(&str, Option<bool>)> = many.iter().map(|(n, p)| (n.as_str(), *p)).collect();
+        let (rows, left_out) = pick_rows(&serde_json::from_value(listing(&many)).unwrap());
+        assert_eq!((rows.len(), left_out), (MAX_OWN_SHOWN, 3));
+    }
+
+    #[test]
+    fn the_three_check_states_are_worded_and_coloured_as_the_theme_says() {
+        assert_eq!(CheckState::Passed.word(), ("ผ่านด่านแล้ว", theme::OK));
+        assert_eq!(CheckState::NotPassed.word(), ("ยังไม่ผ่าน", theme::WARN));
+        assert_eq!(CheckState::Unknown.word(), ("ไม่รู้", theme::FAINT));
+        for state in [
+            CheckState::Passed,
+            CheckState::NotPassed,
+            CheckState::Unknown,
+        ] {
+            assert_ne!(state.word().1, theme::ACCENT, "ส้มคือสีของระบบ ไม่ใช่คำตัดสิน");
+        }
+        let row = PickRow {
+            name: "x".into(),
+            title: "ของคุณ · x".into(),
+            detail: "d".into(),
+            state: CheckState::NotPassed,
+            why: String::new(),
+        };
+        let job = pick_job(&row);
+        assert_eq!(job.text, "ของคุณ · x  ·  ยังไม่ผ่าน\nd");
+        let word = job
+            .sections
+            .iter()
+            .find(|section| {
+                job.text[section.byte_range.start.0..section.byte_range.end.0] == *"ยังไม่ผ่าน"
+            })
+            .unwrap();
+        assert_eq!(word.format.color, theme::WARN);
+    }
+
+    #[test]
+    fn the_default_pick_is_the_running_jobs_strategy_else_ping_pong() {
+        let control = available(&with_strategies(Value::Null, &THREE));
+        assert_eq!(control.selected().as_deref(), Some("ping_pong"));
+
+        // Only the second case study listed: it is the first thing offered.
+        let control = available(&with_strategies(Value::Null, &[("ma_cross", None)]));
+        assert_eq!(control.selected().as_deref(), Some("ma_cross"));
+
+        let mut job = job_of("run", "paper", true, None);
+        job["strategy"] = json!("ma_cross");
+        let mut control = available(&with_strategies(job, &THREE));
+        control.pick = Some("ping_pong".into());
+        assert_eq!(
+            control.selected().as_deref(),
+            Some("ma_cross"),
+            "งานที่รันอยู่ชนะสิ่งที่เลือกไว้"
+        );
+
+        // Nothing listed: nothing to send, so the config decides.
+        assert_eq!(available(READY).selected(), None);
+    }
+
+    #[test]
+    fn a_pick_is_kept_until_it_is_no_longer_offered() {
+        let mut control = available(&with_strategies(Value::Null, &THREE));
+        control.pick = Some("ma_cross".into());
+        assert_eq!(control.selected().as_deref(), Some("ma_cross"));
+        // random is never offered, so it cannot be the pick.
+        control.pick = Some("random".into());
+        assert_eq!(control.selected().as_deref(), Some("ping_pong"));
+        // The student deleted the file.
+        control.pick = Some("ma_cross".into());
+        let gone = with_strategies(Value::Null, &[("ping_pong", Some(true))]);
+        control.accept(reply(200, &gone), 2.0);
+        assert_eq!(control.selected().as_deref(), Some("ping_pong"));
+    }
+
+    #[test]
+    fn the_strategy_goes_into_the_request_only_when_there_is_one() {
+        assert_eq!(
+            with_strategy(json!({"mode": "testnet"}), &Some("mine".into())),
+            json!({"mode": "testnet", "strategy": "mine"})
+        );
+        assert_eq!(
+            with_strategy(json!({}), &Some("mine".into())),
+            json!({"strategy": "mine"})
+        );
+        assert_eq!(with_strategy(json!({}), &None), json!({}));
+    }
+
+    #[test]
+    fn step_two_follows_the_strategy_picked_not_whichever_checked_last() {
+        // ping_pong passed, ma_cross has not.
+        let mut control = testnet(&with_strategies(Value::Null, &THREE));
+        assert_eq!(control.step(), Step::Start, "ping_pong ผ่านแล้ว");
+        control.pick = Some("ma_cross".into());
+        assert_eq!(control.step(), Step::Check, "ma_cross ยังไม่ผ่าน");
+        let text = screen(&mut control);
+        assert!(text.contains("2 ตรวจกลยุทธ์ (ตอนนี้)"), "{text}");
+
+        // Unknown is not passed.
+        let control = testnet(&with_strategies(Value::Null, &[("mine", None)]));
+        assert_eq!(control.step(), Step::Check);
+        // Keys still come first.
+        let mut nokeys = testnet(&with_strategies(Value::Null, &THREE));
+        nokeys.snapshot.keys = KeysSet::default();
+        assert_eq!(nokeys.step(), Step::Keys);
+        // A passed check that only an old job remembers does not count once
+        // the listing says otherwise.
+        let mut control = testnet(&with_strategies(
+            job_of("check", "testnet", false, Some(0)),
+            &[("ma_cross", Some(false))],
+        ));
+        control.pick = Some("ma_cross".into());
+        assert_eq!(control.step(), Step::Check);
+    }
+
+    #[test]
+    fn the_card_lists_the_picker_with_its_words_and_hides_random() {
+        let mut control = available(&with_strategies(Value::Null, &THREE));
+        let text = screen(&mut control);
+        for want in [
+            "เลือกกลยุทธ์",
+            "กรณีศึกษา 1 · ping_pong  ·  ผ่านด่านแล้ว",
+            "เครื่องทดสอบ เข้าออกถี่ให้เห็นกลไก ไม่ใช่กลยุทธ์ทำเงิน",
+            "กรณีศึกษา 2 · ma_cross  ·  ยังไม่ผ่าน",
+            "ตามเทรนด์ เส้นค่าเฉลี่ยเร็วตัดเส้นช้า อาจรอหลายนาทีกว่าจะมีไม้",
+            OWN_HINT,
+        ] {
+            assert!(text.contains(want), "ไม่มี {want}: {text}");
+        }
+        assert!(!text.contains("random"), "{text}");
+        // The first case study is above the second, the hint is below both.
+        let at = |needle: &str| text.find(needle).unwrap();
+        assert!(at("ping_pong") < at("ma_cross") && at("ma_cross") < at(OWN_HINT));
+    }
+
+    #[test]
+    fn the_students_own_strategy_shows_with_description_and_file_and_no_hint() {
+        let mut control = available(&with_strategies(
+            Value::Null,
+            &[("ping_pong", Some(true)), ("mine", None)],
+        ));
+        let text = screen(&mut control);
+        assert!(
+            text.contains("ของคุณ · mine  ·  ไม่รู้")
+                && text.contains("mine in English · tradebot/strategies/mine.py"),
+            "{text}"
+        );
+        assert!(!text.contains("อยากได้กลยุทธ์ของตัวเอง"), "{text}");
+    }
+
+    #[test]
+    fn a_listing_that_failed_says_so_and_a_missing_one_says_it_is_loading() {
+        let mut control = available(READY);
+        let text = screen(&mut control);
+        assert!(text.contains("กำลังอ่านรายการกลยุทธ์"), "{text}");
+
+        let body = with_strategies(Value::Null, &THREE)
+            .replace("\"error\":null", "\"error\":\"boom exit code 3\"");
+        let mut control = available(&body);
+        let text = screen(&mut control);
+        assert!(text.contains("boom exit code 3"), "{text}");
+        assert!(text.contains("กรณีศึกษา 1"), "แถวล่าสุดยังอยู่: {text}");
+    }
+
+    #[test]
+    fn testnet_with_an_unpassed_strategy_points_at_the_check_and_paper_does_not() {
+        let mut control = testnet(&with_strategies(Value::Null, &THREE));
+        control.pick = Some("ma_cross".into());
+        let text = screen(&mut control);
+        assert!(
+            text.contains("testnet ต้องให้ ma_cross ผ่านด่านตรวจก่อน"),
+            "{text}"
+        );
+        assert!(text.contains("กด ดึงข้อมูล + ตรวจกลยุทธ์"), "{text}");
+
+        // A passed one: nothing to say.
+        control.pick = Some("ping_pong".into());
+        assert!(!screen(&mut control).contains("ต้องให้ ping_pong"));
+
+        let mut unknown = testnet(&with_strategies(Value::Null, &[("mine", None)]));
+        assert!(screen(&mut unknown).contains("ยังไม่รู้ว่า mine ผ่านด่านตรวจหรือยัง"));
+
+        // Paper needs no check.
+        let mut paper = available(&with_strategies(Value::Null, &THREE));
+        paper.pick = Some("ma_cross".into());
+        assert!(!screen(&mut paper).contains("ผ่านด่านตรวจก่อน"));
+    }
+
+    #[test]
+    fn the_running_strategy_is_named_in_the_status_line() {
+        let mut job = job_of("run", "testnet", true, None);
+        job["strategy"] = json!("ma_cross");
+        let mut control = available(&with_strategies(job, &THREE));
+        let text = screen(&mut control);
+        assert!(text.contains("กำลังรัน · testnet · ma_cross"), "{text}");
+    }
+
+    #[test]
+    fn the_picker_and_all_its_notes_still_leave_room_for_the_output() {
+        // The fullest the picker gets: five of the student's own, the "and
+        // more" line, a failed refresh, and the check guidance under the
+        // buttons - in testnet with the guide on top.
+        let mut rows: Vec<(String, Option<bool>)> = vec![
+            ("ping_pong".into(), Some(true)),
+            ("ma_cross".into(), Some(false)),
+        ];
+        rows.extend((0..8).map(|n| (format!("mine{n}"), None)));
+        let rows: Vec<(&str, Option<bool>)> = rows.iter().map(|(n, p)| (n.as_str(), *p)).collect();
+        let body = with_strategies(Value::Null, &rows).replace(
+            "\"error\":null",
+            "\"error\":\"a fairly long reason the listing failed\"",
+        );
+        let mut control = testnet(&body);
+        control.pick = Some("mine1".into());
+        let found = painted_at(&mut control, 1.0);
+        let heading = found
+            .iter()
+            .find(|(text, _)| text == "ข้อความจากรอบล่าสุด")
+            .map(|(_, y)| *y)
+            .expect("หัวข้อกล่องข้อความต้องยังอยู่");
+        assert!(
+            SLOT_BODY_HEIGHT - heading >= 90.0,
+            "กล่องข้อความเหลือที่ {} px จาก {SLOT_BODY_HEIGHT}",
+            SLOT_BODY_HEIGHT - heading
+        );
     }
 }

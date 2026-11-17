@@ -101,6 +101,49 @@ def test_listing_strategies_needs_no_config(capsys):
     assert "random" in out and "ma_cross" in out
 
 
+def test_listing_strategies_as_json_names_each_file_and_its_check(tmp_path, config_file, capsys):
+    cfg = config_file(TESTNET_CONFIG)
+    assert main(["--list-strategies", "--json", "--config", cfg, *paths(tmp_path)]) == 0
+    listing = json.loads(capsys.readouterr().out)
+    rows = {row["name"]: row for row in listing["strategies"]}
+    assert {"random", "ma_cross", "ping_pong"} <= set(rows)
+    assert rows["ma_cross"]["file"].endswith("tradebot/strategies/ma_cross.py")
+    assert rows["ping_pong"]["check"]["passed"] is False
+    assert "never passed --check" in rows["ping_pong"]["check"]["why"]
+
+
+def test_the_json_listing_says_passed_once_the_check_report_matches(tmp_path, config_file, capsys):
+    from tradebot.cli.check import fingerprint, market_of, report_path
+    from tradebot.strategies import STRATEGIES
+
+    cfg = config_file(TESTNET_CONFIG)
+    report = report_path(tmp_path, "ping_pong")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "fingerprint": fingerprint(STRATEGIES["ping_pong"])[1],
+                "market": market_of(load_config(cfg, allow_missing_env=True)),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--list-strategies", "--json", "--config", cfg, *paths(tmp_path)]) == 0
+    rows = {row["name"]: row for row in json.loads(capsys.readouterr().out)["strategies"]}
+    assert rows["ping_pong"]["check"] == {"passed": True, "why": ""}
+    assert rows["ma_cross"]["check"]["passed"] is False
+
+
+def test_the_json_listing_says_unknown_when_the_config_cannot_be_read(
+    tmp_path, config_file, capsys
+):
+    cfg = config_file("exchange: nowhere\n")
+    assert main(["--list-strategies", "--json", "--config", cfg, *paths(tmp_path)]) == 0
+    listing = json.loads(capsys.readouterr().out)
+    assert all(row["check"] is None for row in listing["strategies"])
+
+
 def test_a_dry_run_trades_on_paper(tmp_path, config_file):
     code = main(
         [

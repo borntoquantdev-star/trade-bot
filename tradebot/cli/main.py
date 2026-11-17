@@ -30,11 +30,14 @@ the exchange.
 from __future__ import annotations
 
 import argparse
+import inspect
+import json
 import logging
 import sys
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from .. import __version__, runs
 from ..backtest import run_backtest, summary, trade_table, write_json
@@ -47,7 +50,7 @@ from ..core.engine import Engine
 from ..data.fetch import download
 from ..data.store import DEFAULT_ROOT, CandleStore
 from ..money import D
-from ..strategies import UnknownStrategy, build_strategy, describe_strategies
+from ..strategies import STRATEGIES, UnknownStrategy, build_strategy, describe_strategies
 from ..utils.logger import setup_logger
 from .check import clearance as check_clearance
 from .check import run_check
@@ -185,6 +188,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-strategies", action="store_true", help="print the registry and exit"
     )
     actions.add_argument(
+        "--json",
+        action="store_true",
+        help="with --list-strategies: machine-readable, with whether each one passed "
+        "--check on --config (what the board's strategy picker reads)",
+    )
+    actions.add_argument(
         "--doctor", action="store_true", help="check config and connectivity, then exit"
     )
     actions.add_argument("--resume", action="store_true", help="clear a halt and exit")
@@ -282,6 +291,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.list_strategies:
+        if args.json:
+            print(json.dumps(_strategy_listing(args), ensure_ascii=True))
+            return 0
         print("Registered strategies:\n")
         print(describe_strategies())
         return 0
@@ -574,6 +586,38 @@ def _check(config: BotConfig, args: argparse.Namespace, log: logging.Logger) -> 
     print()
     print(f"report: {write_check(report, folder)}")
     return 0 if report.passed else 1
+
+
+def _strategy_listing(args: argparse.Namespace) -> dict[str, Any]:
+    """Every registered strategy, its source file, and whether it may trade live.
+
+    The board shows this as a picker, so a student's own strategy appears next
+    to the worked examples as soon as it is registered. ``check`` comes from
+    the same :func:`check_clearance` that ``--live`` asks, and is ``None`` when
+    the config cannot be read - the picker then says "unknown", never "passed".
+    """
+    config: BotConfig | None = None
+    path = args.config if args.config and Path(args.config).exists() else None
+    try:
+        config = load_config(path, allow_missing_env=True)
+    except ConfigError:
+        config = None
+    folder = Path(args.log_file).parent if args.log_file else Path("logs")
+    rows = []
+    for name, cls in sorted(STRATEGIES.items()):
+        source = inspect.getsourcefile(cls)
+        try:
+            file = Path(source).resolve().relative_to(Path.cwd().resolve()).as_posix()
+        except (TypeError, ValueError):
+            file = source or ""
+        check = None
+        if config is not None:
+            why = check_clearance(name, cls, config, folder)
+            check = {"passed": why is None, "why": why or ""}
+        rows.append(
+            {"name": name, "description": cls.description or "", "file": file, "check": check}
+        )
+    return {"config": args.config if path else None, "strategies": rows}
 
 
 def _cleared(config: BotConfig, args: argparse.Namespace, log: logging.Logger) -> int | None:

@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -126,7 +126,11 @@ impl Mode {
 
 /// The command line of each action. The only place a `tradebot` argument is
 /// spelled, and the browser never contributes one.
-pub fn command_args(action: Action, mode: Mode) -> Vec<String> {
+///
+/// `strategy` is a name that has already been checked against the bot's own
+/// listing (see `Control::validated_strategy`); it becomes `--strategy <name>`
+/// on a run and on a check, and nothing else.
+pub fn command_args(action: Action, mode: Mode, strategy: Option<&str>) -> Vec<String> {
     let args: &[&str] = match (action, mode) {
         (Action::Run, Mode::Paper) => &[
             "--config",
@@ -149,7 +153,24 @@ pub fn command_args(action: Action, mode: Mode) -> Vec<String> {
             &["--config", "config/testnet.yaml", "--live", "--resume"]
         }
     };
-    args.iter().map(|arg| (*arg).to_owned()).collect()
+    let mut args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    if let Some(name) = strategy.filter(|_| action != Action::Resume) {
+        args.push("--strategy".to_owned());
+        args.push(name.to_owned());
+    }
+    args
+}
+
+/// Ask the bot which strategies it has. One line of JSON on stdout.
+pub fn list_args() -> Vec<String> {
+    [
+        "--list-strategies",
+        "--json",
+        "--config",
+        "config/testnet.yaml",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 /// Download the testnet's recent 1m candles. Two days, not the check's 365:
@@ -296,6 +317,7 @@ struct Job {
     id: u64,
     action: Action,
     mode: Mode,
+    strategy: Option<String>,
     started_at: String,
     running: bool,
     exit_code: Option<i32>,
@@ -312,7 +334,40 @@ struct Shared {
     output: Ring,
     /// Values scrubbed from every line before it is stored.
     secrets: Vec<String>,
+    strategies: Strategies,
 }
+
+/// What the bot last said about its strategies, and when to ask again.
+///
+/// Asking runs Python (about half a second), so the page's polling never
+/// does it: `GET /api/control` only *notices* that the answer is stale -
+/// first time, a job ended, the strategy files changed, or the last try
+/// failed a while ago - and starts one background refresh.
+#[derive(Default)]
+struct Strategies {
+    listing: Option<Listing>,
+    /// A job ended since the last refresh began: a check changes pass state.
+    dirty: bool,
+    busy: bool,
+    /// Newest file mtime and file count in `tradebot/strategies/` when the
+    /// last refresh began.
+    seen: Option<(SystemTime, usize)>,
+    last_attempt: Option<Instant>,
+}
+
+#[derive(Clone)]
+struct Listing {
+    /// One object per strategy: `name`, `description`, `file`, `check`
+    /// (`null`, or `{passed, why}`).
+    list: Vec<Value>,
+    error: Option<String>,
+}
+
+/// A failed listing is tried again after this long, with no other trigger.
+const LISTING_RETRY: Duration = Duration::from_secs(15);
+
+/// A listing that takes longer than this is given up on.
+const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct Inner {
     root: PathBuf,
@@ -349,6 +404,7 @@ impl Control {
                     job: None,
                     output: Ring::new(RING_LINES),
                     secrets: Vec::new(),
+                    strategies: Strategies::default(),
                 }),
                 env_lock: Mutex::new(()),
                 kill_after,
@@ -464,6 +520,7 @@ impl Control {
 
         if self.inner.program.exists() {
             self.set_setup(SetupState::Ready, MSG_READY);
+            self.poke_strategies();
             SetupState::Ready
         } else {
             self.push_line("-- ติดตั้งจบแล้วแต่ไม่เจอ tradebot ใน .venv --");
@@ -525,17 +582,19 @@ impl Control {
     // -- jobs ---------------------------------------------------------------
 
     /// Start `tradebot` for an action. One job at a time.
-    pub fn start(&self, action: Action, mode: Mode) -> Result<(), Refusal> {
+    ///
+    /// `strategy` must already have passed `validated_strategy`.
+    pub fn start(&self, action: Action, mode: Mode, strategy: Option<&str>) -> Result<(), Refusal> {
         let program = self.inner.program.clone();
         if action != Action::Check {
-            let args = command_args(action, mode);
-            return self.start_process(action, mode, program, args);
+            let steps = vec![Step::new(command_args(action, mode, strategy))];
+            return self.start_steps_for(action, mode, strategy, program, steps, None);
         }
 
         // A check is always about testnet, whatever the page said, and it is
         // the one action that can be two steps: see `plan_check`.
         let env_text = std::fs::read_to_string(self.env_path()).unwrap_or_default();
-        let check = Step::new(command_args(Action::Check, Mode::Testnet));
+        let check = Step::new(command_args(Action::Check, Mode::Testnet, strategy));
         let (preamble, steps) = match plan_check(&env_text) {
             CheckPlan::CheckOnly => (Some(NOTE_NO_KEYS.to_owned()), vec![check]),
             CheckPlan::FetchThenCheck => (
@@ -546,9 +605,10 @@ impl Control {
                 ],
             ),
         };
-        self.start_steps(action, Mode::Testnet, program, steps, preamble)
+        self.start_steps_for(action, Mode::Testnet, strategy, program, steps, preamble)
     }
 
+    #[cfg(test)]
     fn start_process(
         &self,
         action: Action,
@@ -559,13 +619,26 @@ impl Control {
         self.start_steps(action, mode, program, vec![Step::new(args)], None)
     }
 
-    /// Start a job of one or more steps, run one after another under one job
-    /// id and one output buffer. `preamble` is a line to show before the
-    /// first command. The job's exit code is the last step's.
+    #[cfg(test)]
     fn start_steps(
         &self,
         action: Action,
         mode: Mode,
+        program: PathBuf,
+        steps: Vec<Step>,
+        preamble: Option<String>,
+    ) -> Result<(), Refusal> {
+        self.start_steps_for(action, mode, None, program, steps, preamble)
+    }
+
+    /// Start a job of one or more steps, run one after another under one job
+    /// id and one output buffer. `preamble` is a line to show before the
+    /// first command. The job's exit code is the last step's.
+    fn start_steps_for(
+        &self,
+        action: Action,
+        mode: Mode,
+        strategy: Option<&str>,
         program: PathBuf,
         steps: Vec<Step>,
         preamble: Option<String>,
@@ -621,6 +694,7 @@ impl Control {
             id,
             action,
             mode,
+            strategy: strategy.map(str::to_owned),
             started_at: now_rfc3339(),
             running: true,
             exit_code: None,
@@ -728,6 +802,8 @@ impl Control {
                 job.exit_code = Some(code);
                 job.stopping = false;
             }
+            // A check changes which strategies have passed.
+            state.strategies.dirty = true;
         }
         self.push_line(&format!("-- จบการทำงาน (exit code {code}) --"));
         let _ = std::fs::remove_file(self.stop_file());
@@ -815,6 +891,7 @@ impl Control {
     /// What `GET /api/control` answers.
     pub async fn snapshot(&self) -> Value {
         self.refresh_setup();
+        self.poke_strategies();
         let env_text = tokio::fs::read_to_string(self.env_path())
             .await
             .unwrap_or_default();
@@ -827,6 +904,7 @@ impl Control {
             "job": state.job.as_ref().map(|job| json!({
                 "action": job.action.as_str(),
                 "mode": job.mode.as_str(),
+                "strategy": job.strategy,
                 "started_at": job.started_at,
                 "running": job.running,
                 "exit_code": job.exit_code,
@@ -835,7 +913,138 @@ impl Control {
             "output": state.output.to_vec(),
             "keys": key_flags(&env_text),
             "halted": { "paper": paper, "testnet": testnet },
+            "strategies": state.strategies.listing.as_ref().map(|listing| json!({
+                "list": listing.list,
+                "error": listing.error,
+            })),
         })
+    }
+
+    // -- strategies ---------------------------------------------------------
+
+    fn strategies_dir(&self) -> PathBuf {
+        self.inner.root.join("tradebot").join("strategies")
+    }
+
+    /// Start a background refresh of the strategy listing if it is stale.
+    /// Cheap and synchronous (one `read_dir`); the Python runs in a task.
+    /// Must be called from inside the tokio runtime.
+    fn poke_strategies(&self) {
+        let signature = strategies_signature(&self.strategies_dir(), &self.logs());
+        {
+            let mut state = self.lock();
+            if state.setup.0 != SetupState::Ready || state.strategies.busy {
+                return;
+            }
+            let strategies = &mut state.strategies;
+            let failed_a_while_ago = strategies
+                .listing
+                .as_ref()
+                .is_some_and(|listing| listing.error.is_some())
+                && strategies
+                    .last_attempt
+                    .is_some_and(|at| at.elapsed() >= LISTING_RETRY);
+            let stale = strategies.listing.is_none()
+                || strategies.dirty
+                || strategies.seen != signature
+                || failed_a_while_ago;
+            if !stale {
+                return;
+            }
+            strategies.busy = true;
+            strategies.dirty = false;
+            strategies.seen = signature;
+            strategies.last_attempt = Some(Instant::now());
+        }
+        let this = self.clone();
+        tokio::spawn(async move { this.refresh_strategies().await });
+    }
+
+    /// Ask the bot for its strategies and keep the answer. A failure is kept
+    /// too, as an `error`, so the page can say so instead of staying blank.
+    /// The caller has set `busy`; this clears it.
+    async fn refresh_strategies(&self) {
+        let outcome = self.run_listing().await;
+        let mut state = self.lock();
+        // A failed refresh keeps the rows of the last good one: a hiccup must
+        // not empty the picker under a student's hands.
+        let kept = state
+            .strategies
+            .listing
+            .take()
+            .map(|listing| listing.list)
+            .unwrap_or_default();
+        state.strategies.listing = Some(match outcome {
+            Ok(list) => Listing { list, error: None },
+            Err(error) => Listing {
+                list: kept,
+                error: Some(error),
+            },
+        });
+        state.strategies.busy = false;
+    }
+
+    async fn run_listing(&self) -> Result<Vec<Value>, String> {
+        let mut command = child_command(&self.inner.program, &list_args(), &self.inner.root);
+        command.kill_on_drop(true);
+        let run = tokio::time::timeout(LISTING_TIMEOUT, command.output()).await;
+        let output = match run {
+            Err(_) => return Err("ขอรายการกลยุทธ์จากบอทนานเกินไป".to_owned()),
+            Ok(Err(err)) => return Err(format!("เปิดบอทเพื่อขอรายการกลยุทธ์ไม่ได้: {err}")),
+            Ok(Ok(output)) => output,
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() {
+            return parse_listing(&stdout);
+        }
+        let code = output.status.code().unwrap_or(-1);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim();
+        let mut message = format!("ขอรายการกลยุทธ์จากบอทไม่สำเร็จ (exit code {code})");
+        if !tail.is_empty() {
+            let clipped: String = tail.chars().take(300).collect();
+            message.push_str(" · ");
+            message.push_str(&self.scrub(&clipped));
+        }
+        Err(message)
+    }
+
+    fn scrub(&self, text: &str) -> String {
+        let state = self.lock();
+        let mut text = text.to_owned();
+        for secret in &state.secrets {
+            text = text.replace(secret.as_str(), "***");
+        }
+        text
+    }
+
+    /// The `strategy` a request asks for, if any, checked against the last
+    /// listing: a name the bot did not list never reaches a command line.
+    pub fn validated_strategy(&self, body: &[u8]) -> Result<Option<String>, Refusal> {
+        let Some(name) = parse_strategy(body)? else {
+            return Ok(None);
+        };
+        let state = self.lock();
+        let known = state.strategies.listing.as_ref().is_some_and(|listing| {
+            listing
+                .list
+                .iter()
+                .any(|row| row["name"].as_str() == Some(name.as_str()))
+        });
+        if known {
+            Ok(Some(name))
+        } else {
+            Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "ไม่รู้จักกลยุทธ์นี้ · ไม่อยู่ในรายการที่บอทแจ้งมา \
+                 (ถ้าเพิ่งเขียนใหม่ รอสักครู่แล้วลองอีกครั้ง)",
+            ))
+        }
     }
 
     // -- keys ---------------------------------------------------------------
@@ -1215,6 +1424,108 @@ pub fn parse_keys(body: &[u8]) -> Result<KeysRequest, Refusal> {
     })
 }
 
+/// Newest file mtime and number of files in the strategies folder, plus the
+/// same for the check reports (`logs/check-*.json`), or `None` if there is
+/// neither. A report is written by a check run from a terminal as well, which
+/// no job of ours sees end. Files only: the bot's own `__pycache__` is a
+/// folder, and listing the strategies makes it.
+fn strategies_signature(strategies: &Path, logs: &Path) -> Option<(SystemTime, usize)> {
+    let mut newest = SystemTime::UNIX_EPOCH;
+    let mut count = 0;
+    let mut found = false;
+    for (dir, only) in [(strategies, None), (logs, Some("check-"))] {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        found = true;
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            if only.is_some_and(|prefix| !entry.file_name().to_string_lossy().starts_with(prefix)) {
+                continue;
+            }
+            count += 1;
+            if let Ok(modified) = meta.modified() {
+                newest = newest.max(modified);
+            }
+        }
+    }
+    found.then_some((newest, count))
+}
+
+/// The rows of `tradebot --list-strategies --json`. The JSON is the last
+/// line that looks like an object, in case something printed a warning first.
+/// Only the four fields the page uses are kept.
+pub fn parse_listing(stdout: &str) -> Result<Vec<Value>, String> {
+    let bad = || "บอทตอบรายการกลยุทธ์มาในรูปแบบที่อ่านไม่ออก".to_owned();
+    let line = stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with('{'))
+        .ok_or_else(bad)?;
+    let value: Value = serde_json::from_str(line).map_err(|_| bad())?;
+    let rows = value
+        .get("strategies")
+        .and_then(Value::as_array)
+        .ok_or_else(bad)?;
+    let text = |row: &Value, key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let name = row.get("name").and_then(Value::as_str)?;
+            if !valid_strategy_name(name) {
+                return None;
+            }
+            let check = row.get("check").and_then(Value::as_object).map(|check| {
+                json!({
+                    "passed": check.get("passed").and_then(Value::as_bool).unwrap_or(false),
+                    "why": check.get("why").and_then(Value::as_str).unwrap_or(""),
+                })
+            });
+            Some(json!({
+                "name": name,
+                "description": text(row, "description"),
+                "file": text(row, "file"),
+                "check": check,
+            }))
+        })
+        .collect())
+}
+
+/// `^[a-z0-9_]{1,64}$`
+pub fn valid_strategy_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The optional `"strategy"` of a request body: absent or `null` is `None`;
+/// anything but a well-formed name is a 400. An empty body is "no strategy"
+/// (the check button once sent none).
+fn parse_strategy(body: &[u8]) -> Result<Option<String>, Refusal> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+    let bad = |why: &str| Refusal::new(StatusCode::BAD_REQUEST, why.to_owned());
+    let value: Value = serde_json::from_slice(body).map_err(|_| bad("อ่านข้อมูลที่ส่งมาไม่ออก"))?;
+    match value.get("strategy") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) if valid_strategy_name(name) => Ok(Some(name.clone())),
+        Some(_) => Err(bad(
+            "ชื่อกลยุทธ์ไม่ถูกต้อง · ใช้ได้เฉพาะ a-z 0-9 และ _ ยาวไม่เกิน 64 ตัว",
+        )),
+    }
+}
+
 fn parse_mode(body: &[u8]) -> Result<Mode, Refusal> {
     let value: Option<Value> = serde_json::from_slice(body).ok();
     match value
@@ -1350,7 +1661,11 @@ async fn run(State(ctx): State<Ctx>, body: Bytes) -> Response {
         Ok(mode) => mode,
         Err(refusal) => return refusal.into_response(),
     };
-    match ctx.control.start(Action::Run, mode) {
+    let strategy = match ctx.control.validated_strategy(&body) {
+        Ok(strategy) => strategy,
+        Err(refusal) => return refusal.into_response(),
+    };
+    match ctx.control.start(Action::Run, mode, strategy.as_deref()) {
         Ok(()) => done(&ctx).await,
         Err(refusal) => refusal.into_response(),
     }
@@ -1361,14 +1676,21 @@ async fn resume(State(ctx): State<Ctx>, body: Bytes) -> Response {
         Ok(mode) => mode,
         Err(refusal) => return refusal.into_response(),
     };
-    match ctx.control.start(Action::Resume, mode) {
+    match ctx.control.start(Action::Resume, mode, None) {
         Ok(()) => done(&ctx).await,
         Err(refusal) => refusal.into_response(),
     }
 }
 
-async fn check(State(ctx): State<Ctx>) -> Response {
-    match ctx.control.start(Action::Check, Mode::Testnet) {
+async fn check(State(ctx): State<Ctx>, body: Bytes) -> Response {
+    let strategy = match ctx.control.validated_strategy(&body) {
+        Ok(strategy) => strategy,
+        Err(refusal) => return refusal.into_response(),
+    };
+    match ctx
+        .control
+        .start(Action::Check, Mode::Testnet, strategy.as_deref())
+    {
         Ok(()) => done(&ctx).await,
         Err(refusal) => refusal.into_response(),
     }
